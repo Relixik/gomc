@@ -1,0 +1,44 @@
+# Configuration golangci-lint pour gomc.
+# golangci-lint est un OUTIL DE DEV (jamais importé par le code) — il ne viole
+# pas la règle "zéro dépendance". Voir CONVENTIONS.md §1.
+run:
+  timeout: 3m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck      # toute erreur retournée doit être gérée
+    - ineffassign
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - revive        # style idiomatique Go
+    - gocritic
+    - bodyclose     # fermer les corps HTTP (auth/hasJoined)
+    - gosec         # sécurité (anti-DoS, crypto)
+    - unconvert
+    - prealloc
+
+linters-settings:
+  goimports:
+    # Regroupe nos imports séparément de la stdlib.
+    local-prefixes: github.com/Relixik/gomc
+  revive:
+    rules:
+      - name: exported            # symboles exportés documentés
+      - name: package-comments    # chaque package a un doc.go
+      - name: error-strings
+      - name: context-as-argument
+
+issues:
+  # Les tests golden-bytes ont des littéraux d'octets volumineux : on n'embête pas gosec/lll dessus.
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - gocritic
+  max-issues-per-linter: 0
+  max-same-issues: 0

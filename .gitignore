@@ -1,0 +1,40 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# IntelliJ project files
+.idea
+*.iml
+out
+gen
+
+*.log
+
+# --- gomc (nouveau projet) ---
+
+# Archive de l'ancien fork 1.15.2 : référence de lecture, exclue du nouveau repo.
+# NB: déjà suivi par git -> nécessite `git rm -r --cached old/` pour le dé-suivre
+# (voir WORKFLOW.md §6). Le .gitignore seul ne dé-suit pas un fichier déjà commité.
+old/
+
+# Artefacts d'exécution du serveur
+/server.properties
+/world/
+*.mca
+/logs/
+
+# Profiling
+*.prof
+*.pprof
