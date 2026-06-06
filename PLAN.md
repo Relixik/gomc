@@ -94,8 +94,9 @@ Couches du bas vers le haut, chacune ne dépend que des couches inférieures :
 **Fait pour la partie squelette** : nouveau module à la racine, `cmd/server` ouvre un listener TCP, `old/` archivé. Reste à implémenter codec/nbt/text/frame/auth avec tests golden-bytes.
 **Vérif** : `go test ./...` vert. Vecteurs golden : VarInt (`0,1,127,128,255,2147483647,-1⇒5 octets`), Position round-trip, NBT racine-sans-nom (+ racine String), CFB8 contre les vecteurs de référence de l'ancien code, hash serveur SHA-1 (`Notch`, `jeb_`, `simon`).
 
-### 🎯 M1 — Se connecter, configurer, spawn et **BOUGER** dans un monde vide *(2-3 sem)* — **le jalon décisif**
-**But** : un vrai client 26.1.2 non modifié fait Handshaking → Login (**offline**, sans chiffrement) → Configuration (registres minimaux mais complets) → Play, spawn dans un monde vide/void, et le joueur peut marcher/regarder.
+### ✅ M1 — Se connecter, configurer, spawn dans un monde vide — **TERMINÉ** (commit d2c6169)
+**Atteint** : un vrai client 26.1.2 fait Handshaking → Status → Login (offline) → Configuration (28 registres + Update Tags) → Play (Login(play) + chunks void + Synchronize Position + keep-alive) et **spawn**. Tout en gomc-maison, vérifié contre une capture vanilla. Pièges résolus : header de section chunk sur 4 octets, Update Tags obligatoire, tolérance des paquets serverbound inconnus. (Détails dans la mémoire projet.)
+**But initial** : un vrai client 26.1.2 non modifié fait Handshaking → Login (**offline**, sans chiffrement) → Configuration (registres minimaux mais complets) → Play, spawn dans un monde vide/void, et le joueur peut marcher/regarder.
 **Paquets** :
 - Handshaking sb `0x00` (Intent 1/2/3 ; peek `0xFE`)
 - Status : sb `0x00` Request / cb `0x00` Response(JSON) / sb `0x01` Ping / cb `0x01` Pong
