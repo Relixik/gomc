@@ -36,8 +36,13 @@ func TestRegistryLookup(t *testing.T) {
 	} else if _, isPing := d.(*StatusPing); !isPing {
 		t.Errorf("got %T, want *StatusPing", d)
 	}
-	if _, ok := NewServerbound(StatePlay, 0x00); ok {
-		t.Error("expected no Play packet registered yet")
+	if d, ok := NewServerbound(StatePlay, idPlayConfirmTeleport); !ok {
+		t.Error("play confirm-teleport not registered")
+	} else if _, isConfirm := d.(*ConfirmTeleport); !isConfirm {
+		t.Errorf("got %T, want *ConfirmTeleport", d)
+	}
+	if _, ok := NewServerbound(StatePlay, 0x7E); ok {
+		t.Error("expected no Play packet registered at 0x7E")
 	}
 }
 
