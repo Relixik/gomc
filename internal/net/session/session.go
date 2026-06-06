@@ -12,6 +12,7 @@ import (
 	"github.com/Relixik/gomc/internal/protocol/codec"
 	"github.com/Relixik/gomc/internal/protocol/frame"
 	"github.com/Relixik/gomc/internal/protocol/packet"
+	"github.com/Relixik/gomc/internal/protocol/registry"
 	"github.com/Relixik/gomc/internal/protocol/text"
 )
 
@@ -183,11 +184,15 @@ func (s *Session) enterConfiguration() error {
 }
 
 func (s *Session) onKnownPacks(p *packet.KnownPacksServerbound) error {
-	s.logger.Info("client known packs", "count", len(p.Packs))
-	// TODO(M1): send Registry Data (one packet per synchronised registry) +
-	// Update Tags + Finish Configuration once the authoritative registry set is
-	// available from the 26.1.2 data generator (registries.json).
-	return nil
+	s.logger.Debug("client known packs", "count", len(p.Packs))
+	// Send the synchronised registries (captured vanilla set/order, all
+	// has_data=false since we share the core pack), then finish configuration.
+	for _, rd := range registry.SyncedData() {
+		if err := s.send(rd); err != nil {
+			return err
+		}
+	}
+	return s.send(&packet.FinishConfiguration{})
 }
 
 // send writes a clientbound packet (id + fields) through the frame layer.
