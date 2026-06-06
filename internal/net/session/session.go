@@ -1,7 +1,9 @@
 package session
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +31,26 @@ const viewDistance = 2
 // client is disconnected by vanilla after ~15s of silence).
 const keepAlivePeriod = 10 * time.Second
 
+// Options configures online-mode authentication and compression for a session.
+type Options struct {
+	// OnlineMode requires the AES/CFB8 encryption handshake plus Mojang session
+	// verification before login completes. When false the session runs offline:
+	// the UUID is derived from the name and no encryption is negotiated.
+	OnlineMode bool
+
+	// KeyPair is the server's RSA key used for the encryption handshake. Required
+	// when OnlineMode is true; ignored otherwise (it may be shared across sessions).
+	KeyPair *auth.KeyPair
+
+	// CompressionThreshold enables zlib compression for packet bodies of at least
+	// this many bytes once login completes; a negative value disables compression.
+	CompressionThreshold int
+
+	// Authenticate verifies an online-mode join with the Mojang session server.
+	// Defaults to auth.HasJoined; tests override it to avoid network access.
+	Authenticate func(ctx context.Context, username, serverHash string) (*auth.Profile, error)
+}
+
 // Session drives one connection through the protocol state machine. Lifecycle
 // states (handshaking/status/login/configuration) are handled inline on the
 // read goroutine; Play adds an asynchronous keep-alive sender, so writes are
@@ -38,27 +60,35 @@ type Session struct {
 	state  packet.State
 	logger *slog.Logger
 	status text.StatusResponse
+	opts   Options
+	ctx    context.Context // the connection's context, set in Serve
 
 	sendMu sync.Mutex    // serialises clientbound writes
 	done   chan struct{} // closed when Serve returns
 
 	// Set during login.
-	username string
-	uuid     codec.UUID
-	entityID int32
+	username    string
+	uuid        codec.UUID
+	properties  []packet.LoginProperty
+	verifyToken []byte // expected echo in the Encryption Response (online mode)
+	entityID    int32
 }
 
 // New wraps conn in a Session in the Handshaking state. status is the snapshot
-// served to server-list pings.
-func New(conn net.Conn, status text.StatusResponse, logger *slog.Logger) *Session {
+// served to server-list pings; opts configures online mode and compression.
+func New(conn net.Conn, status text.StatusResponse, opts Options, logger *slog.Logger) *Session {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if opts.Authenticate == nil {
+		opts.Authenticate = auth.HasJoined
 	}
 	return &Session{
 		conn:   frame.NewConn(conn),
 		state:  packet.StateHandshaking,
 		logger: logger,
 		status: status,
+		opts:   opts,
 		done:   make(chan struct{}),
 	}
 }
@@ -66,6 +96,7 @@ func New(conn net.Conn, status text.StatusResponse, logger *slog.Logger) *Sessio
 // Serve runs the read loop until the connection closes, the context is
 // cancelled, or a handler signals completion. It always closes the connection.
 func (s *Session) Serve(ctx context.Context) {
+	s.ctx = ctx
 	defer s.conn.Close()
 	defer close(s.done)
 
@@ -122,6 +153,8 @@ func (s *Session) handle(body []byte) error {
 		return s.onStatusPing(p)
 	case *packet.LoginStart:
 		return s.onLoginStart(p)
+	case *packet.EncryptionResponse:
+		return s.onEncryptionResponse(p)
 	case *packet.LoginAcknowledged:
 		return s.onLoginAcknowledged()
 	case *packet.ClientInformation:
@@ -182,16 +215,97 @@ func (s *Session) onStatusPing(p *packet.StatusPing) error {
 }
 
 func (s *Session) onLoginStart(p *packet.LoginStart) error {
-	// Offline mode (M1): derive the UUID from the name; no encryption or Mojang
-	// auth yet (that lands in M2). The client-supplied UUID is ignored.
 	s.username = p.Name
+	if s.opts.OnlineMode {
+		// Online mode: start the encryption handshake; the profile (and real UUID)
+		// arrive after the Mojang session check in onEncryptionResponse.
+		return s.beginEncryption()
+	}
+	// Offline mode: derive the UUID from the name; no encryption or Mojang auth.
+	// The client-supplied UUID is ignored.
 	s.uuid = auth.OfflineUUID(p.Name)
-	return s.send(&packet.LoginSuccess{UUID: s.uuid, Name: s.username})
+	return s.finishLogin()
+}
+
+// beginEncryption sends Encryption Request with a fresh verify token. The client
+// replies with the RSA-encrypted shared secret and the echoed token.
+func (s *Session) beginEncryption() error {
+	token := make([]byte, 4)
+	if _, err := rand.Read(token); err != nil {
+		return err
+	}
+	s.verifyToken = token
+	return s.send(&packet.EncryptionRequest{
+		ServerID:           "", // empty since 1.7, still hashed into the server id
+		PublicKey:          s.opts.KeyPair.PublicDER,
+		VerifyToken:        token,
+		ShouldAuthenticate: true,
+	})
+}
+
+// onEncryptionResponse decrypts the shared secret and verify token, enables
+// encryption (from the next byte in each direction), verifies the join with
+// Mojang, and adopts the authenticated profile before finishing login.
+func (s *Session) onEncryptionResponse(p *packet.EncryptionResponse) error {
+	secret, err := s.opts.KeyPair.Decrypt(p.SharedSecret)
+	if err != nil {
+		return fmt.Errorf("decrypt shared secret: %w", err)
+	}
+	if len(secret) != 16 {
+		return fmt.Errorf("shared secret is %d bytes, want 16", len(secret))
+	}
+	token, err := s.opts.KeyPair.Decrypt(p.VerifyToken)
+	if err != nil {
+		return fmt.Errorf("decrypt verify token: %w", err)
+	}
+	if !bytes.Equal(token, s.verifyToken) {
+		return errors.New("verify token mismatch")
+	}
+	if err := s.conn.EnableEncryption(secret); err != nil {
+		return err
+	}
+
+	// The server hash must use the same (empty) server id, secret, and public key
+	// the client hashed, or Mojang reports the player as not authenticated.
+	hash := auth.ServerHash("", secret, s.opts.KeyPair.PublicDER)
+	profile, err := s.opts.Authenticate(s.ctx, s.username, hash)
+	if err != nil {
+		return fmt.Errorf("authenticate %q: %w", s.username, err)
+	}
+	uuid, err := profile.UUID()
+	if err != nil {
+		return fmt.Errorf("parse profile uuid: %w", err)
+	}
+	s.username = profile.Name
+	s.uuid = uuid
+	s.properties = make([]packet.LoginProperty, len(profile.Properties))
+	for i, pr := range profile.Properties {
+		s.properties[i] = packet.LoginProperty{Name: pr.Name, Value: pr.Value, Signature: pr.Signature}
+	}
+	s.logger.Info("player authenticated (online)", "name", s.username, "uuid", s.uuid)
+	return s.finishLogin()
+}
+
+// finishLogin optionally enables compression (Set Compression must precede
+// Login Success, which becomes the first packet under the new framing) and then
+// sends Login Success.
+func (s *Session) finishLogin() error {
+	if s.opts.CompressionThreshold >= 0 {
+		if err := s.send(&packet.SetCompression{Threshold: int32(s.opts.CompressionThreshold)}); err != nil {
+			return err
+		}
+		s.conn.SetCompressionThreshold(s.opts.CompressionThreshold)
+	}
+	return s.send(&packet.LoginSuccess{UUID: s.uuid, Name: s.username, Properties: s.properties})
 }
 
 func (s *Session) onLoginAcknowledged() error {
 	s.state = packet.StateConfiguration
-	s.logger.Info("player logged in (offline)", "name", s.username, "uuid", s.uuid)
+	mode := "offline"
+	if s.opts.OnlineMode {
+		mode = "online"
+	}
+	s.logger.Info("player logged in", "name", s.username, "uuid", s.uuid, "mode", mode)
 	return s.enterConfiguration()
 }
 

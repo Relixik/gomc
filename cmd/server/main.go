@@ -18,6 +18,8 @@ import (
 func main() {
 	host := flag.String("host", "0.0.0.0", "address the server binds to")
 	port := flag.Int("port", 25565, "port the server binds to")
+	online := flag.Bool("online", false, "require Mojang authentication (online mode) with encryption")
+	compression := flag.Int("compression-threshold", 256, "compress packet bodies of at least N bytes (-1 disables)")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
 
@@ -31,7 +33,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg := server.Config{Host: *host, Port: *port}
+	cfg := server.Config{
+		Host:                 *host,
+		Port:                 *port,
+		OnlineMode:           *online,
+		CompressionThreshold: *compression,
+	}
 
 	slog.Info("starting gomc", "protocol", 775, "version", "26.1.2")
 	if err := server.Run(ctx, cfg); err != nil {

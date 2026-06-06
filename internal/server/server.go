@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 
 	"github.com/Relixik/gomc/internal/net/session"
+	"github.com/Relixik/gomc/internal/protocol/auth"
 	"github.com/Relixik/gomc/internal/protocol/packet"
 	"github.com/Relixik/gomc/internal/protocol/text"
 )
@@ -14,12 +16,27 @@ import (
 // Run starts the TCP listener and serves each connection through a Session
 // until ctx is cancelled. Each connection runs its own goroutine.
 func Run(ctx context.Context, cfg Config) error {
+	opts := session.Options{
+		OnlineMode:           cfg.OnlineMode,
+		CompressionThreshold: cfg.compressionThreshold(),
+	}
+	if cfg.OnlineMode {
+		// One RSA key pair is generated at startup and shared across connections,
+		// exactly as the vanilla server does.
+		kp, err := auth.GenerateKeyPair()
+		if err != nil {
+			return fmt.Errorf("generate server key pair: %w", err)
+		}
+		opts.KeyPair = kp
+	}
+
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr())
 	if err != nil {
 		return err
 	}
-	slog.Info("listening", "addr", cfg.Addr(), "protocol", packet.ProtocolVersion, "version", packet.GameVersion)
+	slog.Info("listening", "addr", cfg.Addr(), "protocol", packet.ProtocolVersion, "version", packet.GameVersion,
+		"online", cfg.OnlineMode, "compression", opts.CompressionThreshold)
 
 	// Close the listener when the context is cancelled so Accept unblocks.
 	go func() {
@@ -37,7 +54,7 @@ func Run(ctx context.Context, cfg Config) error {
 			slog.Warn("accept error", "err", err)
 			continue
 		}
-		go session.New(conn, status, slog.Default()).Serve(ctx)
+		go session.New(conn, status, opts, slog.Default()).Serve(ctx)
 	}
 }
 

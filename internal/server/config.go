@@ -17,6 +17,11 @@ type Config struct {
 	// M1 runs offline (false); online mode is wired up in M2.
 	OnlineMode bool
 
+	// CompressionThreshold sets the zlib threshold sent in Set Compression:
+	// a value > 0 compresses packet bodies of at least that many bytes, a
+	// negative value disables compression, and 0 selects the vanilla default.
+	CompressionThreshold int
+
 	// MaxPlayers is advertised in the status (server list) response.
 	MaxPlayers int
 
@@ -27,7 +32,19 @@ type Config struct {
 	ViewDistance int
 }
 
+// defaultCompressionThreshold matches the vanilla network-compression-threshold.
+const defaultCompressionThreshold = 256
+
 // Addr returns the host:port string for net.Listen.
 func (c Config) Addr() string {
 	return net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
+}
+
+// compressionThreshold resolves the configured threshold, mapping the zero value
+// to the vanilla default so a zero-value Config still compresses sensibly.
+func (c Config) compressionThreshold() int {
+	if c.CompressionThreshold == 0 {
+		return defaultCompressionThreshold
+	}
+	return c.CompressionThreshold
 }
