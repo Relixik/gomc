@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Relixik/gomc/internal/protocol/auth"
 	"github.com/Relixik/gomc/internal/protocol/codec"
 	"github.com/Relixik/gomc/internal/protocol/frame"
 	"github.com/Relixik/gomc/internal/protocol/packet"
@@ -90,9 +91,9 @@ func TestStatusPing(t *testing.T) {
 	}
 }
 
-// TestHandshakeToLogin checks the handshake routes to the Login state (the
-// branch M1 continues from next).
-func TestHandshakeToLogin(t *testing.T) {
+// TestLoginOffline drives handshake (next=login) -> LoginStart -> LoginSuccess
+// and asserts the offline UUID is derived from the name.
+func TestLoginOffline(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	sess := New(serverConn, text.StatusResponse{}, quietLogger())
 	go sess.Serve(context.Background())
@@ -104,9 +105,39 @@ func TestHandshakeToLogin(t *testing.T) {
 		w.UShort(25565)
 		w.VarInt(packet.IntentLogin)
 	})
-	// No Login handler yet: send an unknown packet so the session ends; the test
-	// asserts the connection is closed rather than hanging.
-	writePacket(t, client, 0x7F, func(*codec.Writer) {})
+	// LoginStart: name + a client UUID that the server should ignore in offline mode.
+	writePacket(t, client, 0x00, func(w *codec.Writer) {
+		w.String("Notch")
+		w.UUID(codec.UUID{})
+	})
+
+	body, err := client.ReadPacket()
+	if err != nil {
+		t.Fatalf("read LoginSuccess: %v", err)
+	}
+	r := codec.NewReader(body)
+	if id := r.VarInt(); id != 0x02 {
+		t.Fatalf("LoginSuccess id = %#x", id)
+	}
+	gotUUID := r.UUID()
+	gotName := r.String(16)
+	nProps := r.VarInt()
+	if r.Err() != nil {
+		t.Fatalf("decode LoginSuccess: %v", r.Err())
+	}
+	if gotName != "Notch" {
+		t.Errorf("name = %q, want Notch", gotName)
+	}
+	if gotUUID != auth.OfflineUUID("Notch") {
+		t.Errorf("uuid = %s, want offline UUID", gotUUID)
+	}
+	if nProps != 0 {
+		t.Errorf("properties = %d, want 0", nProps)
+	}
+
+	// Acknowledge login; the session must accept it (transition to Configuration)
+	// without erroring.
+	writePacket(t, client, 0x03, func(*codec.Writer) {})
 	_ = clientConn.Close()
 }
 

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 
+	"github.com/Relixik/gomc/internal/protocol/auth"
 	"github.com/Relixik/gomc/internal/protocol/codec"
 	"github.com/Relixik/gomc/internal/protocol/frame"
 	"github.com/Relixik/gomc/internal/protocol/packet"
@@ -26,6 +27,10 @@ type Session struct {
 	state  packet.State
 	logger *slog.Logger
 	status text.StatusResponse
+
+	// Set during login.
+	username string
+	uuid     codec.UUID
 }
 
 // New wraps conn in a Session in the Handshaking state. status is the snapshot
@@ -96,6 +101,10 @@ func (s *Session) handle(body []byte) error {
 		return s.onStatusRequest()
 	case *packet.StatusPing:
 		return s.onStatusPing(p)
+	case *packet.LoginStart:
+		return s.onLoginStart(p)
+	case *packet.LoginAcknowledged:
+		return s.onLoginAcknowledged()
 	default:
 		return fmt.Errorf("no handler for %T in state %s", p, s.state)
 	}
@@ -126,6 +135,22 @@ func (s *Session) onStatusPing(p *packet.StatusPing) error {
 		return err
 	}
 	return errClose // the client closes the connection after the pong
+}
+
+func (s *Session) onLoginStart(p *packet.LoginStart) error {
+	// Offline mode (M1): derive the UUID from the name; no encryption or Mojang
+	// auth yet (that lands in M2). The client-supplied UUID is ignored.
+	s.username = p.Name
+	s.uuid = auth.OfflineUUID(p.Name)
+	return s.send(&packet.LoginSuccess{UUID: s.uuid, Name: s.username})
+}
+
+func (s *Session) onLoginAcknowledged() error {
+	s.state = packet.StateConfiguration
+	s.logger.Info("player logged in (offline)", "name", s.username, "uuid", s.uuid)
+	// Configuration handlers land next; until then the client's first
+	// configuration packet will close the session.
+	return nil
 }
 
 // send writes a clientbound packet (id + fields) through the frame layer.
