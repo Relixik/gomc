@@ -83,11 +83,12 @@ func (s *Session) Serve(ctx context.Context) {
 	for {
 		body, err := s.conn.ReadPacket()
 		if err != nil {
-			return // EOF / closed / read error ends the session
+			s.logger.Info("connection closed by peer", "remote", addr, "state", s.state, "err", err)
+			return
 		}
 		if err := s.handle(body); err != nil {
 			if !errors.Is(err, errClose) {
-				s.logger.Debug("session ended", "remote", addr, "state", s.state, "err", err)
+				s.logger.Warn("session error", "remote", addr, "state", s.state, "err", err)
 			}
 			return
 		}
@@ -102,7 +103,10 @@ func (s *Session) handle(body []byte) error {
 	}
 	dec, ok := packet.NewServerbound(s.state, id)
 	if !ok {
-		return fmt.Errorf("unknown packet: state=%s id=%#x", s.state, id)
+		// Tolerate packets we don't handle yet (the client sends many in Play)
+		// — ignore rather than disconnect. The whole frame is already consumed.
+		s.logger.Debug("ignoring unhandled packet", "state", s.state, "id", fmt.Sprintf("%#x", id))
+		return nil
 	}
 	dec.Decode(r)
 	if r.Err() != nil {
@@ -217,6 +221,11 @@ func (s *Session) onKnownPacks(p *packet.KnownPacksServerbound) error {
 			return err
 		}
 	}
+	// Tags are mandatory: without them the client fails registry loading with
+	// "Unbound tags" (enchantment exclusive_set, dialog, timeline, etc.).
+	if err := s.send(&packet.UpdateTags{Data: registry.Tags()}); err != nil {
+		return err
+	}
 	return s.send(&packet.FinishConfiguration{})
 }
 
@@ -249,7 +258,7 @@ func (s *Session) enterPlay() error {
 	}
 	for x := int32(-viewDistance); x <= viewDistance; x++ {
 		for z := int32(-viewDistance); z <= viewDistance; z++ {
-			if err := s.send(&packet.ChunkData{X: x, Z: z}); err != nil {
+			if err := s.send(&packet.ChunkData{X: x, Z: z, BiomeID: packet.PlainsBiome}); err != nil {
 				return err
 			}
 		}

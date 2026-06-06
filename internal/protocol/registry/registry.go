@@ -16,6 +16,18 @@ import (
 //go:embed registries.json
 var registriesJSON []byte
 
+// tagsData is the captured vanilla 26.1.2 Update Tags packet payload — the tag
+// definitions for the synced registries (enchantment exclusive_set, dialog,
+// timeline, item/block tags, etc.). The client REQUIRES these or registry
+// loading fails ("Unbound tags"). The tags reference registry entries by
+// numeric id, which are valid here because our registry order matches vanilla's.
+//
+//go:embed tags.bin
+var tagsData []byte
+
+// Tags returns the Update Tags packet payload to send during Configuration.
+func Tags() []byte { return tagsData }
+
 type rawRegistry struct {
 	Registry string   `json:"registry"`
 	Entries  []string `json:"entries"`

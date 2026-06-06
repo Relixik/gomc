@@ -8,6 +8,10 @@ import "github.com/Relixik/gomc/internal/protocol/codec"
 // shared core pack.
 const overworldSections = 24
 
+// PlainsBiome is the global id of minecraft:plains in our synced biome registry
+// (its position in the captured vanilla biome order).
+const PlainsBiome int32 = 40
+
 // ChunkData is the Chunk Data and Update Light packet for an empty (void)
 // column: every section is single-valued air. (Play, cb, 0x2D.)
 //
@@ -31,11 +35,17 @@ func (p *ChunkData) Encode(w *codec.Writer) {
 	// Data: all-air sections (single-valued air block states + single biome).
 	data := codec.NewWriter()
 	for s := 0; s < overworldSections; s++ {
-		data.Short(0)          // number of non-air blocks
-		data.UByte(0)          // block states: bits per entry = 0 (single valued)
-		data.VarInt(0)         //   palette value = air (global state id 0)
-		data.UByte(0)          // biomes: bits per entry = 0 (single valued)
-		data.VarInt(p.BiomeID) //   palette value = biome id
+		// Per-section header: 4 bytes for an all-air section (the non-air block
+		// count Short plus 2 bytes the client also consumes), all zero — matches
+		// captured vanilla void sections byte-for-byte.
+		data.Int(0)
+		// Block states: single-valued air (bits-per-entry 0, value 0). The data
+		// array length is NOT sent (calculated since 1.21.5).
+		data.UByte(0)
+		data.VarInt(0)
+		// Biomes: single-valued.
+		data.UByte(0)
+		data.VarInt(p.BiomeID)
 	}
 	w.VarInt(int32(data.Len()))
 	w.Raw(data.Bytes())

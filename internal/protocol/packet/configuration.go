@@ -166,6 +166,14 @@ func (p *ClientboundKnownPacks) Encode(w *codec.Writer) {
 	}
 }
 
+// UpdateTags carries the registry tag definitions. Data is the pre-encoded
+// packet body (the client requires tags or registry loading fails). (Config,
+// cb, 0x0D.)
+type UpdateTags struct{ Data []byte }
+
+func (p *UpdateTags) ID() int32              { return idCfgUpdateTags }
+func (p *UpdateTags) Encode(w *codec.Writer) { w.Raw(p.Data) }
+
 // RegistryEntry is one entry of a Registry Data packet. When Data is nil the
 // entry is sent without inline NBT (has_data=false), relying on a shared known
 // pack; otherwise Data is the entry's network NBT (TODO: nbt.Tag wiring).
