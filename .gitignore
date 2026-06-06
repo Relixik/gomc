@@ -24,9 +24,8 @@ gen
 
 # --- gomc (nouveau projet) ---
 
-# Archive de l'ancien fork 1.15.2 : référence de lecture, exclue du nouveau repo.
-# NB: déjà suivi par git -> nécessite `git rm -r --cached old/` pour le dé-suivre
-# (voir WORKFLOW.md §6). Le .gitignore seul ne dé-suit pas un fichier déjà commité.
+# Archive de l'ancien fork 1.15.2 (jamais commité ; supprimable — récupérable
+# depuis le fork GitHub d'origine).
 old/
 
 # Artefacts d'exécution du serveur
@@ -38,3 +37,8 @@ old/
 # Profiling
 *.prof
 *.pprof
+
+# Référence Minecraft regroupée dans UN seul dossier : le server.jar, ses données
+# extraites/décompilées et les reports du data generator. NE JAMAIS committer.
+/.mcref/
+*.jar
