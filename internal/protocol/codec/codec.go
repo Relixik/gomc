@@ -59,6 +59,15 @@ func (r *Reader) Remaining() int {
 // Pos reports the current read offset.
 func (r *Reader) Pos() int { return r.pos }
 
+// Fail sets the sticky error (only if none is set yet), letting a higher layer
+// — e.g. an NBT or packet decoder — abort on a semantic error. Subsequent reads
+// become no-ops returning zero values.
+func (r *Reader) Fail(err error) {
+	if r.err == nil {
+		r.err = err
+	}
+}
+
 // take returns the next n bytes as a subslice of the underlying buffer (no
 // copy), or nil with the sticky error set if fewer than n bytes remain.
 // Callers that retain the result beyond the Reader's lifetime must copy it.
