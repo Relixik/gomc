@@ -5,22 +5,21 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+
+	"github.com/Relixik/gomc/internal/net/session"
+	"github.com/Relixik/gomc/internal/protocol/packet"
+	"github.com/Relixik/gomc/internal/protocol/text"
 )
 
-// Run starts the TCP listener and accepts connections until ctx is cancelled.
-//
-// M0 status: this is a placeholder accept loop that logs each connection and
-// closes it. The real per-connection lifecycle — Handshaking -> (Status|Login)
-// -> Configuration -> Play — lands in M1 via internal/net/session, and shared
-// world mutation goes through the single authoritative tick loop in
-// internal/game/loop. See PLAN.md for the full roadmap.
+// Run starts the TCP listener and serves each connection through a Session
+// until ctx is cancelled. Each connection runs its own goroutine.
 func Run(ctx context.Context, cfg Config) error {
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.Addr())
 	if err != nil {
 		return err
 	}
-	slog.Info("listening", "addr", cfg.Addr())
+	slog.Info("listening", "addr", cfg.Addr(), "protocol", packet.ProtocolVersion, "version", packet.GameVersion)
 
 	// Close the listener when the context is cancelled so Accept unblocks.
 	go func() {
@@ -28,6 +27,7 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = ln.Close()
 	}()
 
+	status := cfg.status()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -37,15 +37,23 @@ func Run(ctx context.Context, cfg Config) error {
 			slog.Warn("accept error", "err", err)
 			continue
 		}
-		go handleConn(ctx, conn)
+		go session.New(conn, status, slog.Default()).Serve(ctx)
 	}
 }
 
-// handleConn is the per-connection goroutine. In M1 this becomes
-// session.New(conn).Serve(ctx) which owns the read loop and a dedicated
-// outbound write goroutine.
-func handleConn(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
-	slog.Info("connection accepted", "remote", conn.RemoteAddr().String())
-	// M0: no protocol handling yet.
+// status builds the server-list response from the config, applying defaults.
+func (cfg Config) status() text.StatusResponse {
+	maxPlayers := cfg.MaxPlayers
+	if maxPlayers <= 0 {
+		maxPlayers = 20
+	}
+	motd := cfg.MOTD
+	if motd == "" {
+		motd = "A gomc server"
+	}
+	return text.StatusResponse{
+		Version:     text.StatusVersion{Name: packet.GameVersion, Protocol: packet.ProtocolVersion},
+		Players:     text.StatusPlayers{Max: maxPlayers, Online: 0},
+		Description: text.Plain(motd),
+	}
 }
