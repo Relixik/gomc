@@ -105,6 +105,20 @@ func (s *Session) handle(body []byte) error {
 		return s.onLoginStart(p)
 	case *packet.LoginAcknowledged:
 		return s.onLoginAcknowledged()
+	case *packet.ClientInformation:
+		s.logger.Debug("client information", "locale", p.Locale, "view", p.ViewDistance)
+		return nil
+	case *packet.PluginMessageServerbound:
+		s.logger.Debug("plugin message", "channel", p.Channel)
+		return nil
+	case *packet.KnownPacksServerbound:
+		return s.onKnownPacks(p)
+	case *packet.KeepAliveServerbound:
+		return nil
+	case *packet.AckFinishConfiguration:
+		s.state = packet.StatePlay
+		s.logger.Info("entering play", "name", s.username)
+		return nil
 	default:
 		return fmt.Errorf("no handler for %T in state %s", p, s.state)
 	}
@@ -148,8 +162,31 @@ func (s *Session) onLoginStart(p *packet.LoginStart) error {
 func (s *Session) onLoginAcknowledged() error {
 	s.state = packet.StateConfiguration
 	s.logger.Info("player logged in (offline)", "name", s.username, "uuid", s.uuid)
-	// Configuration handlers land next; until then the client's first
-	// configuration packet will close the session.
+	return s.enterConfiguration()
+}
+
+// enterConfiguration sends the initial configuration packets: the server brand,
+// feature flags, and the known-packs advertisement (the vanilla core pack, so
+// registry entries may be sent without inline NBT).
+func (s *Session) enterConfiguration() error {
+	brand := codec.NewWriter()
+	brand.String("gomc")
+	if err := s.send(&packet.PluginMessageClientbound{Channel: "minecraft:brand", Data: brand.Bytes()}); err != nil {
+		return err
+	}
+	if err := s.send(&packet.FeatureFlags{Flags: []string{"minecraft:vanilla"}}); err != nil {
+		return err
+	}
+	return s.send(&packet.ClientboundKnownPacks{
+		Packs: []packet.KnownPack{{Namespace: "minecraft", ID: "core", Version: packet.GameVersion}},
+	})
+}
+
+func (s *Session) onKnownPacks(p *packet.KnownPacksServerbound) error {
+	s.logger.Info("client known packs", "count", len(p.Packs))
+	// TODO(M1): send Registry Data (one packet per synchronised registry) +
+	// Update Tags + Finish Configuration once the authoritative registry set is
+	// available from the 26.1.2 data generator (registries.json).
 	return nil
 }
 
