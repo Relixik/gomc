@@ -98,6 +98,12 @@ type Session struct {
 	posX, posY, posZ float64
 	yaw, pitch       float32
 	onGround         bool
+
+	// Hotbar contents (item ids per hotbar slot, -1 = empty) and the selected
+	// slot, tracked from creative-mode slot sets and held-item changes so a place
+	// action knows which block is in hand. A minimal inventory for block placing.
+	hotbar       [9]int32
+	selectedSlot int32
 }
 
 // New wraps conn in a Session in the Handshaking state. status is the snapshot
@@ -224,6 +230,16 @@ func (s *Session) handle(body []byte) error {
 		return nil
 	case *packet.PlayerAction:
 		return s.onPlayerAction(p)
+	case *packet.SetCarriedItem:
+		if p.Slot >= 0 && p.Slot < int16(len(s.hotbar)) {
+			s.selectedSlot = int32(p.Slot)
+		}
+		return nil
+	case *packet.SetCreativeModeSlot:
+		s.onCreativeSlot(p)
+		return nil
+	case *packet.UseItemOn:
+		return s.onUseItemOn(p)
 	default:
 		return fmt.Errorf("no handler for %T in state %s", p, s.state)
 	}
@@ -393,6 +409,11 @@ func (s *Session) enterPlay() error {
 	if s.opts.Hub != nil {
 		s.entityID = s.opts.Hub.NextEntityID()
 	}
+	// Start with an empty hotbar; creative slot sets fill it as the player picks
+	// blocks (slot 0 is selected by default, matching vanilla).
+	for i := range s.hotbar {
+		s.hotbar[i] = -1
+	}
 	if err := s.send(&packet.LoginPlay{
 		EntityID:            s.entityID,
 		DimensionNames:      []string{"minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"},
@@ -458,6 +479,67 @@ func (s *Session) onPlayerAction(p *packet.PlayerAction) error {
 		s.opts.Hub.Break(p.X, p.Y, p.Z)
 	}
 	return nil
+}
+
+// onCreativeSlot tracks the hotbar contents the player sets in creative mode so a
+// later place action knows which block is in hand. Inventory container slots
+// 36..44 are the nine hotbar slots; other slots are ignored (no full inventory
+// yet).
+func (s *Session) onCreativeSlot(p *packet.SetCreativeModeSlot) {
+	const hotbarFirst, hotbarLast = 36, 44
+	if p.Slot < hotbarFirst || p.Slot > hotbarLast {
+		return
+	}
+	i := p.Slot - hotbarFirst
+	if p.HasItem {
+		s.hotbar[i] = p.ItemID
+	} else {
+		s.hotbar[i] = -1
+	}
+}
+
+// onUseItemOn handles a right-click on a block face — placing the held block. It
+// acknowledges the client's prediction (so it commits rather than rolls back),
+// resolves the held item to a block state, computes the cell adjacent to the
+// clicked face, and asks the hub to set it in the shared world and broadcast it.
+func (s *Session) onUseItemOn(p *packet.UseItemOn) error {
+	if err := s.send(&packet.BlockChangedAck{Sequence: p.Sequence}); err != nil {
+		return err
+	}
+	if !s.joined || s.opts.Hub == nil {
+		return nil
+	}
+	item := s.hotbar[s.selectedSlot]
+	state, placeable := world.BlockStateForItem(item)
+	x, y, z := placeAgainst(p.X, p.Y, p.Z, p.Face)
+	// TODO(M5): drop to Debug once placing is confirmed in-game.
+	s.logger.Info("use_item_on", "slot", s.selectedSlot, "item", item, "state", state,
+		"place", item >= 0 && placeable, "x", x, "y", y, "z", z)
+	if item < 0 || !placeable {
+		return nil // empty hand or a non-block item (tool, food, …)
+	}
+	s.opts.Hub.Place(x, y, z, state)
+	return nil
+}
+
+// placeAgainst returns the cell adjacent to the clicked block on the clicked
+// face — where a placed block goes.
+func placeAgainst(x, y, z, face int32) (int32, int32, int32) {
+	switch face {
+	case 0: // bottom (-Y)
+		y--
+	case 1: // top (+Y)
+		y++
+	case 2: // north (-Z)
+		z--
+	case 3: // south (+Z)
+		z++
+	case 4: // west (-X)
+		x--
+	case 5: // east (+X)
+		x++
+	}
+	return x, y, z
 }
 
 // handleMove processes a movement packet after s.pos*/yaw/pitch have been

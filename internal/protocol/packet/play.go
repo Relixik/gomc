@@ -34,10 +34,16 @@ const (
 	idPlayMoveRot         = 0x20
 	idPlayPlayerLoaded    = 0x2C
 	idPlayPlayerAction    = 0x29
+	idPlaySetCarriedItem  = 0x35
+	idPlaySetCreativeSlot = 0x38
+	idPlayUseItemOn       = 0x42
 )
 
 func init() {
 	registerServerbound(StatePlay, idPlayPlayerAction, func() Decoder { return &PlayerAction{} })
+	registerServerbound(StatePlay, idPlayUseItemOn, func() Decoder { return &UseItemOn{} })
+	registerServerbound(StatePlay, idPlaySetCreativeSlot, func() Decoder { return &SetCreativeModeSlot{} })
+	registerServerbound(StatePlay, idPlaySetCarriedItem, func() Decoder { return &SetCarriedItem{} })
 }
 
 func init() {

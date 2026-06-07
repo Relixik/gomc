@@ -24,7 +24,7 @@ type Hub struct {
 	join    chan JoinRequest
 	move    chan MoveRequest
 	chat    chan chatRequest
-	brk     chan blockBreak
+	setblk  chan blockSet
 	leave   chan int32
 	world   *world.World
 	logger  *slog.Logger
@@ -35,7 +35,12 @@ type chatRequest struct {
 	msg string
 }
 
-type blockBreak struct{ x, y, z int32 }
+// blockSet is a single block change applied to the shared world and broadcast to
+// everyone — a break (state = Air) or a place (any state).
+type blockSet struct {
+	x, y, z int32
+	state   uint32
+}
 
 // JoinRequest registers a player that has entered Play. Out is the session's
 // outbound channel onto which the hub enqueues pre-encoded clientbound packets.
@@ -67,7 +72,7 @@ func New(w *world.World, logger *slog.Logger) *Hub {
 		join:   make(chan JoinRequest, 32),
 		move:   make(chan MoveRequest, 512),
 		chat:   make(chan chatRequest, 64),
-		brk:    make(chan blockBreak, 64),
+		setblk: make(chan blockSet, 64),
 		leave:  make(chan int32, 32),
 		world:  w,
 		logger: logger,
@@ -95,7 +100,12 @@ func (h *Hub) Move(r MoveRequest) {
 func (h *Hub) Chat(eid int32, msg string) { h.chat <- chatRequest{eid: eid, msg: msg} }
 
 // Break sets a block to air in the shared world and tells everyone.
-func (h *Hub) Break(x, y, z int32) { h.brk <- blockBreak{x: x, y: y, z: z} }
+func (h *Hub) Break(x, y, z int32) { h.setblk <- blockSet{x: x, y: y, z: z, state: world.Air} }
+
+// Place sets a block to state in the shared world and tells everyone.
+func (h *Hub) Place(x, y, z int32, state uint32) {
+	h.setblk <- blockSet{x: x, y: y, z: z, state: state}
+}
 
 // Run is the hub's single goroutine; it owns the player registry until ctx ends.
 func (h *Hub) Run(ctx context.Context) {
@@ -112,19 +122,20 @@ func (h *Hub) Run(ctx context.Context) {
 			h.onMove(players, m)
 		case c := <-h.chat:
 			h.onChat(players, c)
-		case b := <-h.brk:
-			h.onBreak(players, b)
+		case b := <-h.setblk:
+			h.onSetBlock(players, b)
 		}
 	}
 }
 
-// onBreak removes a block from the world (so it stays broken for future chunk
-// loads) and broadcasts the change to every player.
-func (h *Hub) onBreak(players map[int32]*player, b blockBreak) {
-	if h.world == nil || !h.world.SetBlock(b.x, b.y, b.z, world.Air) {
+// onSetBlock applies a block change to the world (so it persists for future
+// chunk loads) and broadcasts it to every player. Covers both breaks (Air) and
+// places (any state).
+func (h *Hub) onSetBlock(players map[int32]*player, b blockSet) {
+	if h.world == nil || !h.world.SetBlock(b.x, b.y, b.z, b.state) {
 		return
 	}
-	body := encode(&packet.BlockUpdate{X: b.x, Y: b.y, Z: b.z, BlockState: int32(world.Air)})
+	body := encode(&packet.BlockUpdate{X: b.x, Y: b.y, Z: b.z, BlockState: int32(b.state)})
 	for _, p := range players {
 		enqueue(p.out, body)
 	}

@@ -185,3 +185,31 @@ func TestHubBreak(t *testing.T) {
 		t.Error("world chunk should be modified after a break")
 	}
 }
+
+// TestHubPlace checks a block place mutates the shared world and is broadcast as
+// a Block Update carrying the placed state.
+func TestHubPlace(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := world.NewWorld()
+	h := New(w, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	go h.Run(ctx)
+
+	out := make(chan []byte, 64)
+	eid := h.NextEntityID()
+	h.Join(JoinRequest{EntityID: eid, UUID: codec.UUID{1}, Name: "P1", Out: out})
+	drainN(t, out, 1) // self info
+
+	h.Place(0, -59, 0, world.Stone)
+	r := codec.NewReader(recvBody(t, out))
+	if id := r.VarInt(); id != 0x08 {
+		t.Fatalf("place broadcast id = %#x, want 0x08", id)
+	}
+	r.Position() // x, y, z
+	if st := r.VarInt(); st != int32(world.Stone) {
+		t.Errorf("placed state = %d, want %d", st, world.Stone)
+	}
+	if got := w.ChunkPayload(0, 0); bytes.Equal(got, world.SuperflatPayload()) {
+		t.Error("world chunk should be modified after a place")
+	}
+}
