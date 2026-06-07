@@ -111,7 +111,8 @@ Couches du bas vers le haut, chacune ne dépend que des couches inférieures :
 **Paquets** : cb `0x01` Encryption Request (+ bool *Should Authenticate* 1.20.5+) · sb `0x01` Encryption Response · cb `0x03` Set Compression.
 **Vérif** : compte premium rejoint ; round-trip `encrypt(compress(frame))` ; tests PKCS#1v1.5 + clé DER ; diff de capture à la frontière Set Compression / Login Success.
 
-### M3 — Vrai monde plat + streaming de chunks + view-distance *(2 sem)*
+### ✅ M3 — Vrai monde plat + streaming de chunks + view-distance — **TERMINÉ** (commits b255027, 792bd39)
+**Atteint** : monde superflat réel (bedrock/dirt×2/grass sur plains) remplaçant le void ; le joueur spawn sur l'herbe (Y-60). Paletted containers maison (single/indirect/direct), heightmaps, format de section **vérifié octet par octet** contre une capture vanilla (header `Short(count)+Short(0)`, palette `[85,10,9,0]`). **Streaming dynamique** : la vue (view-distance 8) suit les déplacements — Set Center Chunk + chargement des nouveaux chunks + **Unload Chunk** (`0x25`, ordre Z-puis-X confirmé par capture). Vérifié in vivo par le user (sol solide, pas de chunk noir en marchant). Light approximée full-bright (pas de chunk noir ; light vanilla exacte = raffinement futur, demande un calcul de propagation). Tests golden byte-exact + test de streaming + vérif end-to-end via probe de mouvement.
 **But** : superflat correct (bedrock/dirt/grass), paletted containers + heightmaps justes, (dé)chargement dynamique selon la distance de vue.
 **Paquets** : cb Chunk Data + Update Light (palettes indirect/direct, biomes) · cb Set Center Chunk · cb Unload Chunk · cb Update Light.
 **Vérif** : sol solide visible, aucun chunk noir en marchant loin ; tests d'encodage paletted (single/indirect/direct) + heightmaps ; diff d'un chunk superflat vanilla.
