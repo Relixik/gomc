@@ -10,7 +10,7 @@ import (
 
 func sectionBytes(idx int) []byte {
 	w := codec.NewWriter()
-	writeSection(w, idx)
+	writeSection(w, idx, nil)
 	return w.Bytes()
 }
 
@@ -107,6 +107,29 @@ func TestHeightmapPacking(t *testing.T) {
 	}
 	if got := binary.BigEndian.Uint64(w.Bytes()[:8]); got != want {
 		t.Errorf("first heightmap long = %#x, want %#x", got, want)
+	}
+}
+
+func TestWorldBlockOverride(t *testing.T) {
+	w := NewWorld()
+	if got := w.ChunkPayload(0, 0); !bytes.Equal(got, SuperflatPayload()) {
+		t.Error("a pristine chunk should be the shared base payload")
+	}
+
+	// Break the grass block at (0,-61,0); the chunk payload must change.
+	if !w.SetBlock(0, -61, 0, Air) {
+		t.Fatal("SetBlock returned false for an in-range position")
+	}
+	if got := w.ChunkPayload(0, 0); bytes.Equal(got, SuperflatPayload()) {
+		t.Error("a modified chunk should differ from the base payload")
+	}
+	// An untouched neighbour still shares the base.
+	if got := w.ChunkPayload(1, 0); !bytes.Equal(got, SuperflatPayload()) {
+		t.Error("an untouched chunk should still be the base payload")
+	}
+	// Out-of-range edits are rejected.
+	if w.SetBlock(0, 1000, 0, Air) {
+		t.Error("SetBlock above the world should fail")
 	}
 }
 

@@ -56,6 +56,10 @@ type Options struct {
 	// Hub is the shared player registry that broadcasts presence between
 	// connections. nil runs the session standalone (single player, no presence).
 	Hub *loop.Hub
+
+	// World is the shared block world; chunk payloads come from it so block
+	// changes persist. nil falls back to the pristine superflat columns.
+	World *world.World
 }
 
 // Session drives one connection through the protocol state machine. Lifecycle
@@ -218,6 +222,8 @@ func (s *Session) handle(body []byte) error {
 			s.opts.Hub.Chat(s.entityID, p.Message)
 		}
 		return nil
+	case *packet.PlayerAction:
+		return s.onPlayerAction(p)
 	default:
 		return fmt.Errorf("no handler for %T in state %s", p, s.state)
 	}
@@ -438,6 +444,22 @@ func (s *Session) enterPlay() error {
 	return nil
 }
 
+// onPlayerAction handles block digging: on a (creative-instant or survival-
+// finished) break it acknowledges the client's prediction so the break commits,
+// then asks the hub to remove the block from the shared world and broadcast it.
+func (s *Session) onPlayerAction(p *packet.PlayerAction) error {
+	if p.Status != packet.DigStart && p.Status != packet.DigFinish {
+		return nil // drop-item / swap-hand / etc. are not handled yet
+	}
+	if err := s.send(&packet.BlockChangedAck{Sequence: p.Sequence}); err != nil {
+		return err
+	}
+	if s.joined && s.opts.Hub != nil {
+		s.opts.Hub.Break(p.X, p.Y, p.Z)
+	}
+	return nil
+}
+
 // handleMove processes a movement packet after s.pos*/yaw/pitch have been
 // updated: it forwards the new state to the hub (so other players see the move)
 // and recentres the streamed chunk view if the player crossed a chunk boundary.
@@ -463,14 +485,13 @@ func (s *Session) updateChunks(cx, cz int32) error {
 	if err := s.send(&packet.SetCenterChunk{ChunkX: cx, ChunkZ: cz}); err != nil {
 		return err
 	}
-	payload := world.SuperflatPayload()
 	want := make(map[[2]int32]bool, (2*viewDistance+1)*(2*viewDistance+1))
 	for x := cx - viewDistance; x <= cx+viewDistance; x++ {
 		for z := cz - viewDistance; z <= cz+viewDistance; z++ {
 			key := [2]int32{x, z}
 			want[key] = true
 			if !s.loaded[key] {
-				if err := s.send(&packet.ChunkData{X: x, Z: z, Payload: payload}); err != nil {
+				if err := s.send(&packet.ChunkData{X: x, Z: z, Payload: s.chunkPayload(x, z)}); err != nil {
 					return err
 				}
 				s.loaded[key] = true
@@ -493,6 +514,15 @@ func (s *Session) updateChunks(cx, cz int32) error {
 // the 16-block chunk width, correct for negatives).
 func chunkOf(coord float64) int32 {
 	return int32(math.Floor(coord / 16))
+}
+
+// chunkPayload returns the ChunkData body for (cx,cz) from the shared world
+// (reflecting block changes), or the pristine superflat column when standalone.
+func (s *Session) chunkPayload(cx, cz int32) []byte {
+	if s.opts.World != nil {
+		return s.opts.World.ChunkPayload(cx, cz)
+	}
+	return world.SuperflatPayload()
 }
 
 // keepAliveLoop periodically sends a clientbound Keep Alive while in Play, until

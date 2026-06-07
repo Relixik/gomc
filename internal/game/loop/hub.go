@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"sync/atomic"
 
+	"github.com/Relixik/gomc/internal/game/world"
 	"github.com/Relixik/gomc/internal/protocol/codec"
 	"github.com/Relixik/gomc/internal/protocol/packet"
 	"github.com/Relixik/gomc/internal/protocol/text"
@@ -23,7 +24,9 @@ type Hub struct {
 	join    chan JoinRequest
 	move    chan MoveRequest
 	chat    chan chatRequest
+	brk     chan blockBreak
 	leave   chan int32
+	world   *world.World
 	logger  *slog.Logger
 }
 
@@ -31,6 +34,8 @@ type chatRequest struct {
 	eid int32
 	msg string
 }
+
+type blockBreak struct{ x, y, z int32 }
 
 // JoinRequest registers a player that has entered Play. Out is the session's
 // outbound channel onto which the hub enqueues pre-encoded clientbound packets.
@@ -53,8 +58,8 @@ type MoveRequest struct {
 	OnGround   bool
 }
 
-// New creates an unstarted hub. Call Run in its own goroutine.
-func New(logger *slog.Logger) *Hub {
+// New creates an unstarted hub backed by w. Call Run in its own goroutine.
+func New(w *world.World, logger *slog.Logger) *Hub {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -62,7 +67,9 @@ func New(logger *slog.Logger) *Hub {
 		join:   make(chan JoinRequest, 32),
 		move:   make(chan MoveRequest, 512),
 		chat:   make(chan chatRequest, 64),
+		brk:    make(chan blockBreak, 64),
 		leave:  make(chan int32, 32),
+		world:  w,
 		logger: logger,
 	}
 }
@@ -87,6 +94,9 @@ func (h *Hub) Move(r MoveRequest) {
 // Chat broadcasts a player's chat message to everyone.
 func (h *Hub) Chat(eid int32, msg string) { h.chat <- chatRequest{eid: eid, msg: msg} }
 
+// Break sets a block to air in the shared world and tells everyone.
+func (h *Hub) Break(x, y, z int32) { h.brk <- blockBreak{x: x, y: y, z: z} }
+
 // Run is the hub's single goroutine; it owns the player registry until ctx ends.
 func (h *Hub) Run(ctx context.Context) {
 	players := make(map[int32]*player)
@@ -102,7 +112,21 @@ func (h *Hub) Run(ctx context.Context) {
 			h.onMove(players, m)
 		case c := <-h.chat:
 			h.onChat(players, c)
+		case b := <-h.brk:
+			h.onBreak(players, b)
 		}
+	}
+}
+
+// onBreak removes a block from the world (so it stays broken for future chunk
+// loads) and broadcasts the change to every player.
+func (h *Hub) onBreak(players map[int32]*player, b blockBreak) {
+	if h.world == nil || !h.world.SetBlock(b.x, b.y, b.z, world.Air) {
+		return
+	}
+	body := encode(&packet.BlockUpdate{X: b.x, Y: b.y, Z: b.z, BlockState: int32(world.Air)})
+	for _, p := range players {
+		enqueue(p.out, body)
 	}
 }
 

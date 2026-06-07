@@ -19,13 +19,13 @@ const (
 )
 
 // superflatPayload is the ChunkData body (after the X,Z ints) shared by every
-// column of a superflat world; built once at package init.
-var superflatPayload = buildSuperflatPayload()
+// UNMODIFIED column of a superflat world; built once at package init.
+var superflatPayload = buildPayload(nil)
 
-// SuperflatPayload returns the Chunk Data (and Update Light) packet body that
-// follows the X,Z chunk coordinates: heightmaps, the 24 sections, the empty
-// block-entity list, and full-bright sky light. The returned slice is shared and
-// must not be mutated.
+// SuperflatPayload returns the Chunk Data body for a pristine superflat column:
+// heightmaps, the 24 sections, the empty block-entity list, and full-bright sky
+// light. The returned slice is shared and must not be mutated. Modified columns
+// are encoded on demand by World.ChunkPayload.
 func SuperflatPayload() []byte { return superflatPayload }
 
 // fullBrightLight is one section's sky-light array: 4096 cells × 4 bits = 2048
@@ -38,7 +38,10 @@ var fullBrightLight = func() []byte {
 	return b
 }()
 
-func buildSuperflatPayload() []byte {
+// buildPayload encodes a column's ChunkData body. overrides maps a column-local
+// block index (see blockIndex) to a replacement state id; nil yields the
+// pristine superflat column.
+func buildPayload(overrides map[int]uint32) []byte {
 	w := codec.NewWriter()
 
 	// Heightmaps: WORLD_SURFACE (1), MOTION_BLOCKING_NO_LEAVES (5), and
@@ -60,7 +63,7 @@ func buildSuperflatPayload() []byte {
 	// Section data (length-prefixed).
 	sw := codec.NewWriter()
 	for s := 0; s < SectionCount; s++ {
-		writeSection(sw, s)
+		writeSection(sw, s, overrides)
 	}
 	w.VarInt(int32(sw.Len()))
 	w.Raw(sw.Bytes())
@@ -88,9 +91,16 @@ func buildSuperflatPayload() []byte {
 
 // writeSection encodes one chunk section: the non-air block count, a 2-byte
 // field that is always zero (verified against vanilla — it is NOT part of a
-// 4-byte count), the block-state container, and the biome container.
-func writeSection(w *codec.Writer, sectionIdx int) {
+// 4-byte count), the block-state container, and the biome container. Any
+// overrides falling in this section are applied to the base superflat blocks.
+func writeSection(w *codec.Writer, sectionIdx int, overrides map[int]uint32) {
 	blocks := superflatBlocks(sectionIdx)
+	base := sectionIdx * sectionBlocks
+	for idx, state := range overrides {
+		if idx >= base && idx < base+sectionBlocks {
+			blocks[idx-base] = state
+		}
+	}
 	nonAir := 0
 	for _, b := range blocks {
 		if b != Air {

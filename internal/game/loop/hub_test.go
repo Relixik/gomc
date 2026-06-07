@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Relixik/gomc/internal/game/world"
 	"github.com/Relixik/gomc/internal/protocol/codec"
 )
 
 func quietHub() *Hub {
-	return New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return New(world.NewWorld(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 // recvBody waits for one packet on out and returns its raw body.
@@ -158,5 +159,28 @@ func TestHubChat(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte("<P1> hello")) {
 		t.Errorf("chat body missing formatted message: % x", body)
+	}
+}
+
+// TestHubBreak checks a block break mutates the shared world and is broadcast as
+// a Block Update.
+func TestHubBreak(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := world.NewWorld()
+	h := New(w, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	go h.Run(ctx)
+
+	out := make(chan []byte, 64)
+	eid := h.NextEntityID()
+	h.Join(JoinRequest{EntityID: eid, UUID: codec.UUID{1}, Name: "P1", Out: out})
+	drainN(t, out, 1) // self info
+
+	h.Break(0, -61, 0)
+	if id := recvID(t, out); id != 0x08 {
+		t.Fatalf("break broadcast id = %#x, want 0x08", id)
+	}
+	if got := w.ChunkPayload(0, 0); bytes.Equal(got, world.SuperflatPayload()) {
+		t.Error("world chunk should be modified after a break")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 
 	"github.com/Relixik/gomc/internal/game/loop"
+	"github.com/Relixik/gomc/internal/game/world"
 	"github.com/Relixik/gomc/internal/net/session"
 	"github.com/Relixik/gomc/internal/protocol/auth"
 	"github.com/Relixik/gomc/internal/protocol/packet"
@@ -17,14 +18,17 @@ import (
 // Run starts the TCP listener and serves each connection through a Session
 // until ctx is cancelled. Each connection runs its own goroutine.
 func Run(ctx context.Context, cfg Config) error {
-	// One shared hub broadcasts player presence between all connections.
-	hub := loop.New(slog.Default())
+	// One shared world and hub back every connection: the hub broadcasts presence
+	// and the world holds block changes.
+	w := world.NewWorld()
+	hub := loop.New(w, slog.Default())
 	go hub.Run(ctx)
 
 	opts := session.Options{
 		OnlineMode:           cfg.OnlineMode,
 		CompressionThreshold: cfg.compressionThreshold(),
 		Hub:                  hub,
+		World:                w,
 	}
 	if cfg.OnlineMode {
 		// One RSA key pair is generated at startup and shared across connections,

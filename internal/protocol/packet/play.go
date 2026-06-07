@@ -22,6 +22,8 @@ const (
 	idPlayMoveEntityRot    = 0x38
 	idPlayRotateHead       = 0x53
 	idPlaySystemChat       = 0x79
+	idPlayBlockUpdate      = 0x08
+	idPlayBlockChangedAck  = 0x04
 	// Serverbound
 	idPlayConfirmTeleport = 0x00
 	idPlayChat            = 0x09
@@ -31,7 +33,12 @@ const (
 	idPlayMovePosRot      = 0x1F
 	idPlayMoveRot         = 0x20
 	idPlayPlayerLoaded    = 0x2C
+	idPlayPlayerAction    = 0x29
 )
+
+func init() {
+	registerServerbound(StatePlay, idPlayPlayerAction, func() Decoder { return &PlayerAction{} })
+}
 
 func init() {
 	registerServerbound(StatePlay, idPlayConfirmTeleport, func() Decoder { return &ConfirmTeleport{} })
