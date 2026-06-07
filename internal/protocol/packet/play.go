@@ -13,6 +13,10 @@ const (
 	idPlayUnloadChunk    = 0x25
 	idPlaySyncPosition   = 0x48
 	idPlayKeepAliveCb    = 0x2C
+	idPlayAddEntity      = 0x01
+	idPlayRemoveEntities = 0x4D
+	idPlayInfoUpdate     = 0x46
+	idPlayInfoRemove     = 0x45
 	// Serverbound
 	idPlayConfirmTeleport = 0x00
 	idPlayChat            = 0x09
