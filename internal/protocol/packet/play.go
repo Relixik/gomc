@@ -21,6 +21,7 @@ const (
 	idPlayMoveEntityPosRot = 0x36
 	idPlayMoveEntityRot    = 0x38
 	idPlayRotateHead       = 0x53
+	idPlaySystemChat       = 0x79
 	// Serverbound
 	idPlayConfirmTeleport = 0x00
 	idPlayChat            = 0x09

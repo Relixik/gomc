@@ -7,6 +7,7 @@ import (
 
 	"github.com/Relixik/gomc/internal/protocol/codec"
 	"github.com/Relixik/gomc/internal/protocol/packet"
+	"github.com/Relixik/gomc/internal/protocol/text"
 )
 
 // Hub is the authoritative registry of online players and the fan-out point for
@@ -21,8 +22,14 @@ type Hub struct {
 	nextEID atomic.Int32
 	join    chan JoinRequest
 	move    chan MoveRequest
+	chat    chan chatRequest
 	leave   chan int32
 	logger  *slog.Logger
+}
+
+type chatRequest struct {
+	eid int32
+	msg string
 }
 
 // JoinRequest registers a player that has entered Play. Out is the session's
@@ -54,6 +61,7 @@ func New(logger *slog.Logger) *Hub {
 	return &Hub{
 		join:   make(chan JoinRequest, 32),
 		move:   make(chan MoveRequest, 512),
+		chat:   make(chan chatRequest, 64),
 		leave:  make(chan int32, 32),
 		logger: logger,
 	}
@@ -76,6 +84,9 @@ func (h *Hub) Move(r MoveRequest) {
 	}
 }
 
+// Chat broadcasts a player's chat message to everyone.
+func (h *Hub) Chat(eid int32, msg string) { h.chat <- chatRequest{eid: eid, msg: msg} }
+
 // Run is the hub's single goroutine; it owns the player registry until ctx ends.
 func (h *Hub) Run(ctx context.Context) {
 	players := make(map[int32]*player)
@@ -89,8 +100,24 @@ func (h *Hub) Run(ctx context.Context) {
 			h.onLeave(players, eid)
 		case m := <-h.move:
 			h.onMove(players, m)
+		case c := <-h.chat:
+			h.onChat(players, c)
 		}
 	}
+}
+
+// onChat broadcasts a player's message to everyone (including the sender) as a
+// system message "<name> message".
+func (h *Hub) onChat(players map[int32]*player, c chatRequest) {
+	p, ok := players[c.eid]
+	if !ok {
+		return
+	}
+	body := encode(&packet.SystemChat{Content: text.Plain("<" + p.name + "> " + c.msg)})
+	for _, other := range players {
+		enqueue(other.out, body)
+	}
+	h.logger.Info("chat", "name", p.name, "msg", c.msg)
 }
 
 type player struct {

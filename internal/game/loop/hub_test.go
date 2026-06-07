@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -134,5 +135,28 @@ func TestHubMovement(t *testing.T) {
 	}
 	if id := recvID(t, out2); id != 0x53 {
 		t.Errorf("head id = %#x, want 0x53", id)
+	}
+}
+
+// TestHubChat checks chat is broadcast to everyone as a System Chat carrying
+// "<name> message".
+func TestHubChat(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := quietHub()
+	go h.Run(ctx)
+
+	out := make(chan []byte, 64)
+	eid := h.NextEntityID()
+	h.Join(JoinRequest{EntityID: eid, UUID: codec.UUID{1}, Name: "P1", Out: out})
+	drainN(t, out, 1) // self info
+
+	h.Chat(eid, "hello")
+	body := recvBody(t, out)
+	if id := codec.NewReader(body).VarInt(); id != 0x79 {
+		t.Fatalf("chat id = %#x, want 0x79", id)
+	}
+	if !bytes.Contains(body, []byte("<P1> hello")) {
+		t.Errorf("chat body missing formatted message: % x", body)
 	}
 }

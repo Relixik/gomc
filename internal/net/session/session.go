@@ -214,7 +214,9 @@ func (s *Session) handle(body []byte) error {
 		s.onGround = p.Flags&1 != 0
 		return s.handleMove()
 	case *packet.ChatMessage:
-		s.logger.Info("chat", "name", s.username, "msg", p.Message)
+		if s.joined && s.opts.Hub != nil {
+			s.opts.Hub.Chat(s.entityID, p.Message)
+		}
 		return nil
 	default:
 		return fmt.Errorf("no handler for %T in state %s", p, s.state)
