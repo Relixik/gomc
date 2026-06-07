@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Relixik/gomc/internal/game/world"
 	"github.com/Relixik/gomc/internal/protocol/auth"
 	"github.com/Relixik/gomc/internal/protocol/codec"
 	"github.com/Relixik/gomc/internal/protocol/frame"
@@ -370,14 +371,16 @@ func (s *Session) enterPlay() error {
 	if err := s.send(&packet.SetCenterChunk{ChunkX: 0, ChunkZ: 0}); err != nil {
 		return err
 	}
+	payload := world.SuperflatPayload()
 	for x := int32(-viewDistance); x <= viewDistance; x++ {
 		for z := int32(-viewDistance); z <= viewDistance; z++ {
-			if err := s.send(&packet.ChunkData{X: x, Z: z, BiomeID: packet.PlainsBiome}); err != nil {
+			if err := s.send(&packet.ChunkData{X: x, Z: z, Payload: payload}); err != nil {
 				return err
 			}
 		}
 	}
-	if err := s.send(&packet.SyncPlayerPosition{TeleportID: 1, X: 0, Y: 64, Z: 0}); err != nil {
+	// Spawn standing on the grass surface (the flat top block is at Y -61).
+	if err := s.send(&packet.SyncPlayerPosition{TeleportID: 1, X: 0, Y: -60, Z: 0}); err != nil {
 		return err
 	}
 	go s.keepAliveLoop()
