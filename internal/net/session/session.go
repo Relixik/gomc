@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Relixik/gomc/internal/game/loop"
 	"github.com/Relixik/gomc/internal/game/world"
 	"github.com/Relixik/gomc/internal/protocol/auth"
 	"github.com/Relixik/gomc/internal/protocol/codec"
@@ -51,6 +52,10 @@ type Options struct {
 	// Authenticate verifies an online-mode join with the Mojang session server.
 	// Defaults to auth.HasJoined; tests override it to avoid network access.
 	Authenticate func(ctx context.Context, username, serverHash string) (*auth.Profile, error)
+
+	// Hub is the shared player registry that broadcasts presence between
+	// connections. nil runs the session standalone (single player, no presence).
+	Hub *loop.Hub
 }
 
 // Session drives one connection through the protocol state machine. Lifecycle
@@ -78,6 +83,11 @@ type Session struct {
 	// Play-state chunk streaming (read-goroutine only — no locking needed).
 	chunkX, chunkZ int32             // the player's current center chunk
 	loaded         map[[2]int32]bool // chunk columns currently sent to the client
+
+	// Play-state presence: hub-originated packets are queued on out and flushed
+	// by a dedicated writer goroutine; joined gates the hub leave on disconnect.
+	out    chan []byte
+	joined bool
 }
 
 // New wraps conn in a Session in the Handshaking state. status is the snapshot
@@ -105,6 +115,7 @@ func (s *Session) Serve(ctx context.Context) {
 	s.ctx = ctx
 	defer s.conn.Close()
 	defer close(s.done)
+	defer s.leaveHub()
 
 	// Unblock the blocking ReadPacket when the context is cancelled; the done
 	// channel keeps this watcher (and the keep-alive loop) from leaking.
@@ -358,6 +369,9 @@ func (s *Session) onKnownPacks(p *packet.KnownPacksServerbound) error {
 // teleport. It then starts the keep-alive loop.
 func (s *Session) enterPlay() error {
 	s.entityID = 1
+	if s.opts.Hub != nil {
+		s.entityID = s.opts.Hub.NextEntityID()
+	}
 	if err := s.send(&packet.LoginPlay{
 		EntityID:            s.entityID,
 		DimensionNames:      []string{"minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"},
@@ -389,6 +403,22 @@ func (s *Session) enterPlay() error {
 		return err
 	}
 	go s.keepAliveLoop()
+
+	// Join the shared world: start flushing hub broadcasts, then register so
+	// other players see us and we see them.
+	if s.opts.Hub != nil {
+		s.out = make(chan []byte, 256)
+		go s.drainOutbound()
+		s.opts.Hub.Join(loop.JoinRequest{
+			EntityID:   s.entityID,
+			UUID:       s.uuid,
+			Name:       s.username,
+			Properties: s.properties,
+			X:          0, Y: -60, Z: 0,
+			Out: s.out,
+		})
+		s.joined = true
+	}
 	return nil
 }
 
@@ -461,13 +491,42 @@ func (s *Session) keepAliveLoop() {
 	}
 }
 
-// send writes a clientbound packet (id + fields) through the frame layer. Writes
-// are serialised so the read loop and keep-alive loop can both send safely.
+// send encodes a clientbound packet (id + fields) and writes it through the
+// frame layer.
 func (s *Session) send(p packet.Encoder) error {
 	w := codec.NewWriter()
 	w.VarInt(p.ID())
 	p.Encode(w)
+	return s.sendRaw(w.Bytes())
+}
+
+// sendRaw writes a pre-encoded packet body. Writes are serialised through sendMu
+// so the read loop, keep-alive loop, and outbound drainer can all send safely.
+func (s *Session) sendRaw(body []byte) error {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
-	return s.conn.WritePacket(w.Bytes())
+	return s.conn.WritePacket(body)
+}
+
+// leaveHub removes the player from the shared registry on disconnect so the
+// other players are told to despawn it (the anti-goroutine-leak removal intent).
+func (s *Session) leaveHub() {
+	if s.joined && s.opts.Hub != nil {
+		s.opts.Hub.Leave(s.entityID)
+	}
+}
+
+// drainOutbound flushes hub-originated packets queued on s.out to the client
+// until the session ends.
+func (s *Session) drainOutbound() {
+	for {
+		select {
+		case <-s.done:
+			return
+		case body := <-s.out:
+			if err := s.sendRaw(body); err != nil {
+				return
+			}
+		}
+	}
 }
