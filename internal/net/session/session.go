@@ -511,13 +511,11 @@ func (s *Session) onUseItemOn(p *packet.UseItemOn) error {
 	}
 	item := s.hotbar[s.selectedSlot]
 	state, placeable := world.BlockStateForItemAxis(item, faceToAxis(p.Face))
-	x, y, z := placeAgainst(p.X, p.Y, p.Z, p.Face)
-	// TODO(M5): drop to Debug once placing is confirmed in-game.
-	s.logger.Info("use_item_on", "slot", s.selectedSlot, "item", item, "state", state,
-		"place", item >= 0 && placeable, "x", x, "y", y, "z", z)
 	if item < 0 || !placeable {
 		return nil // empty hand or a non-block item (tool, food, …)
 	}
+	x, y, z := placeAgainst(p.X, p.Y, p.Z, p.Face)
+	s.logger.Debug("block placed", "item", item, "state", state, "x", x, "y", y, "z", z)
 	s.opts.Hub.Place(x, y, z, state)
 	return nil
 }
