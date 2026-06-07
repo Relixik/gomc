@@ -100,12 +100,12 @@ func TestAddEntityEncode(t *testing.T) {
 	if x, y, z := r.Double(), r.Double(), r.Double(); x != 1 || y != -60 || z != 2 {
 		t.Errorf("pos = %v,%v,%v", x, y, z)
 	}
-	r.Angle() // pitch
+	r.Angle()                        // pitch
+	if vel := r.VarInt(); vel != 0 { // optional velocity absent (0x00), between pitch and yaw
+		t.Errorf("velocity = %d, want 0", vel)
+	}
 	if yaw := r.Angle(); yaw != 64 {
 		t.Errorf("yaw = %d", yaw)
-	}
-	if vel := r.VarInt(); vel != 0 { // optional velocity absent (0x00), after yaw
-		t.Errorf("velocity = %d, want 0", vel)
 	}
 	if head := r.Angle(); head != 64 {
 		t.Errorf("head yaw = %d", head)

@@ -72,15 +72,17 @@ func (p *PlayerInfoRemove) Encode(w *codec.Writer) {
 // the client renders it using the profile sent earlier in PlayerInfoUpdate.
 // Angles are 1 byte = 1/256 turn. (Play, cb, 0x01.)
 //
-// The 26.1.2 layout was nailed against vanilla captures (a stationary player at
-// 5 trailing bytes, and moving slimes at 10) plus client crash reports: pitch,
-// yaw, then an OPTIONAL velocity (a low-precision Vec3 "LpVec3" — absent is a
-// single 0x00 byte, present is a flag byte plus a packed uint), then head yaw,
-// then data. gomc only spawns motionless players, so the velocity is always the
-// absent marker 0x00 (right AFTER yaw); a stationary spawn is byte-for-byte
-// vanilla. The earlier crashes came from emitting that 0x00 before yaw, so a
-// rotated player's non-zero yaw landed where the client expects the optional
-// marker and it tried to read a 4-byte velocity past the packet end.
+// The 26.1.2 layout, nailed against vanilla captures (a stationary player at 5
+// trailing bytes and moving slimes at 10) plus client crash reports: pitch, then
+// an OPTIONAL velocity (a low-precision Vec3 "LpVec3" — absent is a single 0x00
+// byte, present is a flag byte plus a packed uint), then yaw, head yaw, data. The
+// velocity sits BETWEEN pitch and yaw; the client reads the optional marker just
+// before that slot, so a 0x00 there means "no velocity" and nothing else is read.
+// gomc only spawns motionless players, so it always emits the 0x00 absent marker
+// and a stationary spawn is byte-for-byte vanilla. (Emitting that 0x00 after yaw
+// instead made a rotated player's non-zero yaw land on the optional marker, so
+// the client read a 4-byte velocity past the packet end — the readUnsignedInt
+// crash at index 46.)
 type AddEntity struct {
 	EntityID            int32
 	UUID                codec.UUID
@@ -100,8 +102,8 @@ func (p *AddEntity) Encode(w *codec.Writer) {
 	w.Double(p.Y)
 	w.Double(p.Z)
 	w.Angle(p.Pitch)
+	w.VarInt(0) // velocity: Optional<LpVec3> absent (0x00), between pitch and yaw
 	w.Angle(p.Yaw)
-	w.VarInt(0) // velocity: Optional<LpVec3> absent (0x00), after yaw
 	w.Angle(p.HeadYaw)
 	w.VarInt(p.Data)
 }
