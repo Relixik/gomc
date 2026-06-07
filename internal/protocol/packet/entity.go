@@ -112,3 +112,77 @@ func (p *RemoveEntities) Encode(w *codec.Writer) {
 		w.VarInt(id)
 	}
 }
+
+// Position deltas are encoded as (newBlock - oldBlock) * 4096 in a Short, so a
+// single update covers at most ±8 blocks per axis.
+const PositionDeltaUnit = 4096
+
+// MoveEntityPos moves an entity by a position delta (no rotation change).
+// (Play, cb, 0x35.)
+type MoveEntityPos struct {
+	EntityID   int32
+	DX, DY, DZ int16
+	OnGround   bool
+}
+
+func (p *MoveEntityPos) ID() int32 { return idPlayMoveEntityPos }
+
+func (p *MoveEntityPos) Encode(w *codec.Writer) {
+	w.VarInt(p.EntityID)
+	w.Short(p.DX)
+	w.Short(p.DY)
+	w.Short(p.DZ)
+	w.Bool(p.OnGround)
+}
+
+// MoveEntityPosRot moves an entity by a position delta and sets its body
+// rotation. (Play, cb, 0x36.)
+type MoveEntityPosRot struct {
+	EntityID   int32
+	DX, DY, DZ int16
+	Yaw, Pitch byte
+	OnGround   bool
+}
+
+func (p *MoveEntityPosRot) ID() int32 { return idPlayMoveEntityPosRot }
+
+func (p *MoveEntityPosRot) Encode(w *codec.Writer) {
+	w.VarInt(p.EntityID)
+	w.Short(p.DX)
+	w.Short(p.DY)
+	w.Short(p.DZ)
+	w.Angle(p.Yaw)
+	w.Angle(p.Pitch)
+	w.Bool(p.OnGround)
+}
+
+// MoveEntityRot sets an entity's body rotation (no position change).
+// (Play, cb, 0x38.)
+type MoveEntityRot struct {
+	EntityID   int32
+	Yaw, Pitch byte
+	OnGround   bool
+}
+
+func (p *MoveEntityRot) ID() int32 { return idPlayMoveEntityRot }
+
+func (p *MoveEntityRot) Encode(w *codec.Writer) {
+	w.VarInt(p.EntityID)
+	w.Angle(p.Yaw)
+	w.Angle(p.Pitch)
+	w.Bool(p.OnGround)
+}
+
+// RotateHead sets an entity's head yaw (independent of body rotation).
+// (Play, cb, 0x53.)
+type RotateHead struct {
+	EntityID int32
+	HeadYaw  byte
+}
+
+func (p *RotateHead) ID() int32 { return idPlayRotateHead }
+
+func (p *RotateHead) Encode(w *codec.Writer) {
+	w.VarInt(p.EntityID)
+	w.Angle(p.HeadYaw)
+}

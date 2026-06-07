@@ -37,11 +37,13 @@ type JoinRequest struct {
 	Out        chan<- []byte
 }
 
-// MoveRequest updates a player's position/rotation (broadcast lands in M4b).
+// MoveRequest updates a player's position/rotation; the hub broadcasts the
+// matching delta (or absolute respawn) to the other players.
 type MoveRequest struct {
 	EntityID   int32
 	X, Y, Z    float64
 	Yaw, Pitch float32
+	OnGround   bool
 }
 
 // New creates an unstarted hub. Call Run in its own goroutine.
@@ -86,25 +88,24 @@ func (h *Hub) Run(ctx context.Context) {
 		case eid := <-h.leave:
 			h.onLeave(players, eid)
 		case m := <-h.move:
-			if p, ok := players[m.EntityID]; ok {
-				p.X, p.Y, p.Z, p.Yaw, p.Pitch = m.X, m.Y, m.Z, m.Yaw, m.Pitch
-			}
+			h.onMove(players, m)
 		}
 	}
 }
 
 type player struct {
-	eid        int32
-	uuid       codec.UUID
-	name       string
-	props      []packet.LoginProperty
-	X, Y, Z    float64
-	Yaw, Pitch float32
-	out        chan<- []byte
+	eid     int32
+	uuid    codec.UUID
+	name    string
+	props   []packet.LoginProperty
+	x, y, z float64 // last position the clients have been told about
+	yaw     byte    // encoded body/head yaw
+	pitch   byte
+	out     chan<- []byte
 }
 
 func (h *Hub) onJoin(players map[int32]*player, r JoinRequest) {
-	p := &player{eid: r.EntityID, uuid: r.UUID, name: r.Name, props: r.Properties, X: r.X, Y: r.Y, Z: r.Z, Yaw: r.Yaw, Pitch: r.Pitch, out: r.Out}
+	p := &player{eid: r.EntityID, uuid: r.UUID, name: r.Name, props: r.Properties, x: r.X, y: r.Y, z: r.Z, yaw: degToAngle(r.Yaw), pitch: degToAngle(r.Pitch), out: r.Out}
 
 	// Tell the newcomer about everyone: one player-info list (existing + self, so
 	// its own skin renders) plus an entity to render for each existing player.
@@ -150,8 +151,66 @@ func infoEntry(p *player) packet.PlayerInfoEntry {
 func spawn(p *player) *packet.AddEntity {
 	return &packet.AddEntity{
 		EntityID: p.eid, UUID: p.uuid, Type: packet.PlayerEntityType,
-		X: p.X, Y: p.Y, Z: p.Z,
-		Yaw: degToAngle(p.Yaw), Pitch: degToAngle(p.Pitch), HeadYaw: degToAngle(p.Yaw),
+		X: p.x, Y: p.y, Z: p.z,
+		Yaw: p.yaw, Pitch: p.pitch, HeadYaw: p.yaw,
+	}
+}
+
+// onMove broadcasts a player's movement to the others as a position/rotation
+// delta. Deltas cover ±8 blocks per axis; a larger jump (a teleport) falls back
+// to despawn + respawn so the position stays exact.
+func (h *Hub) onMove(players map[int32]*player, m MoveRequest) {
+	p, ok := players[m.EntityID]
+	if !ok {
+		return
+	}
+	dx := (m.X - p.x) * packet.PositionDeltaUnit
+	dy := (m.Y - p.y) * packet.PositionDeltaUnit
+	dz := (m.Z - p.z) * packet.PositionDeltaUnit
+	posMoved := dx != 0 || dy != 0 || dz != 0
+	yaw, pitch := degToAngle(m.Yaw), degToAngle(m.Pitch)
+	rotated := yaw != p.yaw || pitch != p.pitch
+	if !posMoved && !rotated {
+		return
+	}
+
+	const limit = 1 << 15 // int16 bound on a delta
+	if posMoved && (dx <= -limit || dx >= limit || dy <= -limit || dy >= limit || dz <= -limit || dz >= limit) {
+		p.x, p.y, p.z, p.yaw, p.pitch = m.X, m.Y, m.Z, yaw, pitch
+		broadcastExcept(players, p.eid, encode(&packet.RemoveEntities{EntityIDs: []int32{p.eid}}))
+		broadcastExcept(players, p.eid, encode(spawn(p)))
+		return
+	}
+
+	ddx, ddy, ddz := int16(dx), int16(dy), int16(dz)
+	var body []byte
+	switch {
+	case posMoved && rotated:
+		body = encode(&packet.MoveEntityPosRot{EntityID: p.eid, DX: ddx, DY: ddy, DZ: ddz, Yaw: yaw, Pitch: pitch, OnGround: m.OnGround})
+	case posMoved:
+		body = encode(&packet.MoveEntityPos{EntityID: p.eid, DX: ddx, DY: ddy, DZ: ddz, OnGround: m.OnGround})
+	default:
+		body = encode(&packet.MoveEntityRot{EntityID: p.eid, Yaw: yaw, Pitch: pitch, OnGround: m.OnGround})
+	}
+	// Advance the known position by the rounded delta so it tracks exactly what
+	// the clients accumulated (no drift).
+	p.x += float64(ddx) / packet.PositionDeltaUnit
+	p.y += float64(ddy) / packet.PositionDeltaUnit
+	p.z += float64(ddz) / packet.PositionDeltaUnit
+	p.yaw, p.pitch = yaw, pitch
+
+	broadcastExcept(players, p.eid, body)
+	if rotated {
+		broadcastExcept(players, p.eid, encode(&packet.RotateHead{EntityID: p.eid, HeadYaw: yaw}))
+	}
+}
+
+// broadcastExcept enqueues a packet to every player but one (the mover).
+func broadcastExcept(players map[int32]*player, except int32, body []byte) {
+	for _, other := range players {
+		if other.eid != except {
+			enqueue(other.out, body)
+		}
 	}
 }
 

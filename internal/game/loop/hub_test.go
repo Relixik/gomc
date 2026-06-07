@@ -14,15 +14,29 @@ func quietHub() *Hub {
 	return New(slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
-// recvID waits for one packet on out and returns its packet id.
-func recvID(t *testing.T, out <-chan []byte) int32 {
+// recvBody waits for one packet on out and returns its raw body.
+func recvBody(t *testing.T, out <-chan []byte) []byte {
 	t.Helper()
 	select {
 	case body := <-out:
-		return codec.NewReader(body).VarInt()
+		return body
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for a broadcast packet")
-		return -1
+		return nil
+	}
+}
+
+// recvID waits for one packet and returns its packet id.
+func recvID(t *testing.T, out <-chan []byte) int32 {
+	t.Helper()
+	return codec.NewReader(recvBody(t, out)).VarInt()
+}
+
+// drainN discards n packets (e.g. the join handshake) before the part under test.
+func drainN(t *testing.T, out <-chan []byte, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		recvBody(t, out)
 	}
 }
 
@@ -72,5 +86,53 @@ func TestHubPresence(t *testing.T) {
 	}
 	if id := recvID(t, out1); id != 0x45 {
 		t.Errorf("P1 info-remove id = %#x, want 0x45", id)
+	}
+}
+
+// TestHubMovement checks that a position move is broadcast as a Set Entity
+// Position delta (newBlock-oldBlock)*4096, and a rotation-only move as Update
+// Entity Rotation followed by Set Head Rotation.
+func TestHubMovement(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := quietHub()
+	go h.Run(ctx)
+
+	out1 := make(chan []byte, 64)
+	out2 := make(chan []byte, 64)
+	eid1 := h.NextEntityID()
+	h.Join(JoinRequest{EntityID: eid1, UUID: codec.UUID{1}, Name: "P1", Y: -60, Out: out1})
+	drainN(t, out1, 1) // self info
+	eid2 := h.NextEntityID()
+	h.Join(JoinRequest{EntityID: eid2, UUID: codec.UUID{2}, Name: "P2", Y: -60, Out: out2})
+	drainN(t, out1, 2) // P2 info + spawn
+	drainN(t, out2, 2) // P1 spawn + list
+
+	// P1 walks +1.5 blocks on X (no rotation): a move_entity_pos delta.
+	h.Move(MoveRequest{EntityID: eid1, X: 1.5, Y: -60, Z: 0, OnGround: true})
+	r := codec.NewReader(recvBody(t, out2))
+	if id := r.VarInt(); id != 0x35 {
+		t.Fatalf("move id = %#x, want 0x35 (pos)", id)
+	}
+	if eid := r.VarInt(); eid != eid1 {
+		t.Errorf("move eid = %d, want %d", eid, eid1)
+	}
+	if dx := r.Short(); dx != 6144 { // 1.5 blocks * 4096
+		t.Errorf("delta X = %d, want 6144", dx)
+	}
+	if dy, dz := r.Short(), r.Short(); dy != 0 || dz != 0 {
+		t.Errorf("delta Y/Z = %d/%d, want 0", dy, dz)
+	}
+	if !r.Bool() {
+		t.Error("onGround = false, want true")
+	}
+
+	// P1 only turns: an Update Entity Rotation then a Set Head Rotation.
+	h.Move(MoveRequest{EntityID: eid1, X: 1.5, Y: -60, Z: 0, Yaw: 90, OnGround: true})
+	if id := recvID(t, out2); id != 0x38 {
+		t.Errorf("rotation id = %#x, want 0x38", id)
+	}
+	if id := recvID(t, out2); id != 0x53 {
+		t.Errorf("head id = %#x, want 0x53", id)
 	}
 }

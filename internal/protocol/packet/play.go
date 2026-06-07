@@ -6,17 +6,21 @@ import "github.com/Relixik/gomc/internal/protocol/codec"
 // generator packets.json. NOTE: protocol 775 shifted all Play ids vs 773.
 const (
 	// Clientbound
-	idPlayLogin          = 0x31
-	idPlayGameEvent      = 0x26
-	idPlaySetCenterChunk = 0x5E
-	idPlayChunkData      = 0x2D
-	idPlayUnloadChunk    = 0x25
-	idPlaySyncPosition   = 0x48
-	idPlayKeepAliveCb    = 0x2C
-	idPlayAddEntity      = 0x01
-	idPlayRemoveEntities = 0x4D
-	idPlayInfoUpdate     = 0x46
-	idPlayInfoRemove     = 0x45
+	idPlayLogin            = 0x31
+	idPlayGameEvent        = 0x26
+	idPlaySetCenterChunk   = 0x5E
+	idPlayChunkData        = 0x2D
+	idPlayUnloadChunk      = 0x25
+	idPlaySyncPosition     = 0x48
+	idPlayKeepAliveCb      = 0x2C
+	idPlayAddEntity        = 0x01
+	idPlayRemoveEntities   = 0x4D
+	idPlayInfoUpdate       = 0x46
+	idPlayInfoRemove       = 0x45
+	idPlayMoveEntityPos    = 0x35
+	idPlayMoveEntityPosRot = 0x36
+	idPlayMoveEntityRot    = 0x38
+	idPlayRotateHead       = 0x53
 	// Serverbound
 	idPlayConfirmTeleport = 0x00
 	idPlayChat            = 0x09

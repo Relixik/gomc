@@ -110,6 +110,50 @@ func TestAddEntityEncode(t *testing.T) {
 	}
 }
 
+func TestMoveEntityPacketsEncode(t *testing.T) {
+	posrot := &MoveEntityPosRot{EntityID: 42, DX: 4096, DY: -2048, DZ: 1, Yaw: 64, Pitch: 200, OnGround: true}
+	if posrot.ID() != 0x36 {
+		t.Errorf("pos_rot id = %#x, want 0x36", posrot.ID())
+	}
+	w := codec.NewWriter()
+	posrot.Encode(w)
+	r := codec.NewReader(w.Bytes())
+	if eid := r.VarInt(); eid != 42 {
+		t.Errorf("eid = %d", eid)
+	}
+	if dx, dy, dz := r.Short(), r.Short(), r.Short(); dx != 4096 || dy != -2048 || dz != 1 {
+		t.Errorf("delta = %d,%d,%d", dx, dy, dz)
+	}
+	if yaw, pitch := r.Angle(), r.Angle(); yaw != 64 || pitch != 200 {
+		t.Errorf("rot = %d,%d", yaw, pitch)
+	}
+	if !r.Bool() {
+		t.Error("onGround = false")
+	}
+	if r.Err() != nil || r.Remaining() != 0 {
+		t.Errorf("err=%v remaining=%d", r.Err(), r.Remaining())
+	}
+
+	pos := &MoveEntityPos{EntityID: 1, DX: 10, DY: 20, DZ: 30}
+	if pos.ID() != 0x35 {
+		t.Errorf("pos id = %#x, want 0x35", pos.ID())
+	}
+	rot := &MoveEntityRot{EntityID: 1, Yaw: 128, Pitch: 0}
+	if rot.ID() != 0x38 {
+		t.Errorf("rot id = %#x, want 0x38", rot.ID())
+	}
+	head := &RotateHead{EntityID: 7, HeadYaw: 64}
+	if head.ID() != 0x53 {
+		t.Errorf("head id = %#x, want 0x53", head.ID())
+	}
+	w = codec.NewWriter()
+	head.Encode(w)
+	r = codec.NewReader(w.Bytes())
+	if eid, hy := r.VarInt(), r.Angle(); eid != 7 || hy != 64 {
+		t.Errorf("head = eid %d yaw %d", eid, hy)
+	}
+}
+
 func TestRemoveEntitiesAndInfoRemove(t *testing.T) {
 	re := &RemoveEntities{EntityIDs: []int32{42, 7}}
 	if re.ID() != 0x4D {

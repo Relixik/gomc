@@ -88,6 +88,12 @@ type Session struct {
 	// by a dedicated writer goroutine; joined gates the hub leave on disconnect.
 	out    chan []byte
 	joined bool
+
+	// Last known player position/rotation, tracked across movement packets (each
+	// carries only some of these fields) and forwarded to the hub.
+	posX, posY, posZ float64
+	yaw, pitch       float32
+	onGround         bool
 }
 
 // New wraps conn in a Session in the Handshaking state. status is the snapshot
@@ -195,11 +201,18 @@ func (s *Session) handle(body []byte) error {
 		s.logger.Info("player spawned", "name", s.username)
 		return nil
 	case *packet.MovePlayerPos:
-		return s.onMove(p.X, p.Z)
+		s.posX, s.posY, s.posZ = p.X, p.Y, p.Z
+		s.onGround = p.Flags&1 != 0
+		return s.handleMove()
 	case *packet.MovePlayerPosRot:
-		return s.onMove(p.X, p.Z)
+		s.posX, s.posY, s.posZ = p.X, p.Y, p.Z
+		s.yaw, s.pitch = p.Yaw, p.Pitch
+		s.onGround = p.Flags&1 != 0
+		return s.handleMove()
 	case *packet.MovePlayerRot:
-		return nil // rotation only — no position change, so no chunk update
+		s.yaw, s.pitch = p.Yaw, p.Pitch
+		s.onGround = p.Flags&1 != 0
+		return s.handleMove()
 	case *packet.ChatMessage:
 		s.logger.Info("chat", "name", s.username, "msg", p.Message)
 		return nil
@@ -399,7 +412,8 @@ func (s *Session) enterPlay() error {
 		return err
 	}
 	// Spawn standing on the grass surface (the flat top block is at Y -61).
-	if err := s.send(&packet.SyncPlayerPosition{TeleportID: 1, X: 0, Y: -60, Z: 0}); err != nil {
+	s.posX, s.posY, s.posZ = 0, -60, 0
+	if err := s.send(&packet.SyncPlayerPosition{TeleportID: 1, X: s.posX, Y: s.posY, Z: s.posZ}); err != nil {
 		return err
 	}
 	go s.keepAliveLoop()
@@ -414,7 +428,7 @@ func (s *Session) enterPlay() error {
 			UUID:       s.uuid,
 			Name:       s.username,
 			Properties: s.properties,
-			X:          0, Y: -60, Z: 0,
+			X:          s.posX, Y: s.posY, Z: s.posZ,
 			Out: s.out,
 		})
 		s.joined = true
@@ -422,11 +436,18 @@ func (s *Session) enterPlay() error {
 	return nil
 }
 
-// onMove reacts to a player position update: if the player crossed into a new
-// chunk, the loaded view is recentred (new chunks streamed in, stale ones
-// unloaded).
-func (s *Session) onMove(x, z float64) error {
-	cx, cz := chunkOf(x), chunkOf(z)
+// handleMove processes a movement packet after s.pos*/yaw/pitch have been
+// updated: it forwards the new state to the hub (so other players see the move)
+// and recentres the streamed chunk view if the player crossed a chunk boundary.
+func (s *Session) handleMove() error {
+	if s.joined && s.opts.Hub != nil {
+		s.opts.Hub.Move(loop.MoveRequest{
+			EntityID: s.entityID,
+			X:        s.posX, Y: s.posY, Z: s.posZ,
+			Yaw: s.yaw, Pitch: s.pitch, OnGround: s.onGround,
+		})
+	}
+	cx, cz := chunkOf(s.posX), chunkOf(s.posZ)
 	if cx == s.chunkX && cz == s.chunkZ {
 		return nil
 	}
