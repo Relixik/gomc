@@ -71,6 +71,11 @@ func (p *PlayerInfoRemove) Encode(w *codec.Writer) {
 // AddEntity spawns an entity. For another player, Type is PlayerEntityType and
 // the client renders it using the profile sent earlier in PlayerInfoUpdate.
 // Angles are 1 byte = 1/256 turn. (Play, cb, 0x01.)
+//
+// The 26.1.2 layout was verified byte-for-byte against a vanilla capture: after
+// the pitch/yaw/head angles and the data VarInt there is a SINGLE trailing byte
+// (the three velocity shorts of older versions are gone). It is zero for a
+// freshly spawned player; non-player velocity will be revisited when mobs land.
 type AddEntity struct {
 	EntityID            int32
 	UUID                codec.UUID
@@ -78,7 +83,6 @@ type AddEntity struct {
 	X, Y, Z             float64
 	Pitch, Yaw, HeadYaw byte
 	Data                int32
-	VelX, VelY, VelZ    int16
 }
 
 func (p *AddEntity) ID() int32 { return idPlayAddEntity }
@@ -94,9 +98,7 @@ func (p *AddEntity) Encode(w *codec.Writer) {
 	w.Angle(p.Yaw)
 	w.Angle(p.HeadYaw)
 	w.VarInt(p.Data)
-	w.Short(p.VelX)
-	w.Short(p.VelY)
-	w.Short(p.VelZ)
+	w.UByte(0) // trailing field, zero at spawn (see the doc comment)
 }
 
 // RemoveEntities despawns entities by id. (Play, cb, 0x4D.)

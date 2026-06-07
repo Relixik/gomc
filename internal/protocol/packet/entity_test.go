@@ -84,6 +84,11 @@ func TestAddEntityEncode(t *testing.T) {
 	}
 	w := codec.NewWriter()
 	p.Encode(w)
+	// Byte-exact vanilla 26.1.2 player spawn: VarInt eid(1) + uuid(16) +
+	// VarInt type 155(2) + 3 double(24) + 3 angle(3) + VarInt data(1) + 1 = 48.
+	if n := len(w.Bytes()); n != 48 {
+		t.Fatalf("encoded length = %d, want 48 (vanilla)", n)
+	}
 	r := codec.NewReader(w.Bytes())
 	if eid := r.VarInt(); eid != 42 {
 		t.Errorf("entity id = %d", eid)
@@ -105,8 +110,9 @@ func TestAddEntityEncode(t *testing.T) {
 	if data := r.VarInt(); data != 0 {
 		t.Errorf("data = %d", data)
 	}
-	if r.Err() != nil {
-		t.Fatalf("decode: %v", r.Err())
+	r.UByte() // trailing byte
+	if r.Err() != nil || r.Remaining() != 0 {
+		t.Fatalf("decode err=%v remaining=%d", r.Err(), r.Remaining())
 	}
 }
 
