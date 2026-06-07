@@ -2,7 +2,6 @@ package loop
 
 import (
 	"context"
-	"encoding/hex"
 	"log/slog"
 	"sync/atomic"
 
@@ -172,7 +171,6 @@ func (h *Hub) onJoin(players map[int32]*player, r JoinRequest) {
 	// Tell everyone else about the newcomer.
 	newInfo := encode(&packet.PlayerInfoUpdate{Players: []packet.PlayerInfoEntry{infoEntry(p)}})
 	newSpawn := encode(spawn(p))
-	h.logger.Info("DEBUG add_entity bytes", "eid", p.eid, "len", len(newSpawn), "hex", hex.EncodeToString(newSpawn))
 	for _, other := range players {
 		enqueue(other.out, newInfo)
 		enqueue(other.out, newSpawn)
