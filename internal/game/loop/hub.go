@@ -158,15 +158,18 @@ type player struct {
 func (h *Hub) onJoin(players map[int32]*player, r JoinRequest) {
 	p := &player{eid: r.EntityID, uuid: r.UUID, name: r.Name, props: r.Properties, x: r.X, y: r.Y, z: r.Z, yaw: degToAngle(r.Yaw), pitch: degToAngle(r.Pitch), out: r.Out}
 
-	// Tell the newcomer about everyone: one player-info list (existing + self, so
-	// its own skin renders) plus an entity to render for each existing player.
+	// Tell the newcomer about everyone. The player-info list (existing + self, so
+	// its own skin renders) MUST go first: the client needs each profile before
+	// the matching entity spawns, or it cannot render the entity.
 	infos := make([]packet.PlayerInfoEntry, 0, len(players)+1)
 	for _, other := range players {
 		infos = append(infos, infoEntry(other))
-		enqueue(p.out, encode(spawn(other)))
 	}
 	infos = append(infos, infoEntry(p))
 	enqueue(p.out, encode(&packet.PlayerInfoUpdate{Players: infos}))
+	for _, other := range players {
+		enqueue(p.out, encode(spawn(other)))
+	}
 
 	// Tell everyone else about the newcomer.
 	newInfo := encode(&packet.PlayerInfoUpdate{Players: []packet.PlayerInfoEntry{infoEntry(p)}})

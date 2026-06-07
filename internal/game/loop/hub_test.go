@@ -73,12 +73,13 @@ func TestHubPresence(t *testing.T) {
 	if id := recvID(t, out1); id != 0x01 {
 		t.Errorf("P1<-P2 spawn id = %#x, want 0x01", id)
 	}
-	// P2 learns about P1 (spawn) and gets the full list (info).
-	if id := recvID(t, out2); id != 0x01 {
-		t.Errorf("P2<-P1 spawn id = %#x, want 0x01", id)
-	}
+	// P2 gets the full player list (info) first, THEN the entity to spawn — the
+	// client needs the profile before the entity renders.
 	if id := recvID(t, out2); id != 0x46 {
 		t.Errorf("P2 list info id = %#x, want 0x46", id)
+	}
+	if id := recvID(t, out2); id != 0x01 {
+		t.Errorf("P2<-P1 spawn id = %#x, want 0x01", id)
 	}
 
 	// P2 leaves: P1 is told to remove the entity and the list entry.
