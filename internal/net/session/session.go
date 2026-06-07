@@ -510,7 +510,7 @@ func (s *Session) onUseItemOn(p *packet.UseItemOn) error {
 		return nil
 	}
 	item := s.hotbar[s.selectedSlot]
-	state, placeable := world.BlockStateForItem(item)
+	state, placeable := world.BlockStateForItemAxis(item, faceToAxis(p.Face))
 	x, y, z := placeAgainst(p.X, p.Y, p.Z, p.Face)
 	// TODO(M5): drop to Debug once placing is confirmed in-game.
 	s.logger.Info("use_item_on", "slot", s.selectedSlot, "item", item, "state", state,
@@ -520,6 +520,19 @@ func (s *Session) onUseItemOn(p *packet.UseItemOn) error {
 	}
 	s.opts.Hub.Place(x, y, z, state)
 	return nil
+}
+
+// faceToAxis maps a clicked block face to the axis a pillar-like block placed
+// against it aligns with: top/bottom -> Y, north/south -> Z, west/east -> X.
+func faceToAxis(face int32) int {
+	switch face {
+	case 0, 1: // bottom / top
+		return world.AxisY
+	case 2, 3: // north / south
+		return world.AxisZ
+	default: // west / east (4, 5)
+		return world.AxisX
+	}
 }
 
 // placeAgainst returns the cell adjacent to the clicked block on the clicked
