@@ -72,12 +72,13 @@ func (p *PlayerInfoRemove) Encode(w *codec.Writer) {
 // the client renders it using the profile sent earlier in PlayerInfoUpdate.
 // Angles are 1 byte = 1/256 turn. (Play, cb, 0x01.)
 //
-// The 26.1.2 field order was nailed against a vanilla capture and a client crash
-// report: pitch, yaw, then VELOCITY (a low-precision Vec3, "LpVec3"), THEN head
-// yaw, then data. The velocity sits between yaw and head yaw — not at the end as
-// in older versions, and the three velocity shorts are gone. A zero velocity is
-// a single 0x00 byte, so a stationary player spawn is 48 bytes (verified
-// byte-for-byte); non-zero velocity encoding is revisited when mobs land.
+// The 26.1.2 field order was nailed against vanilla captures (a stationary player
+// and a moving slime) and two client crash reports: pitch, then VELOCITY (a
+// low-precision Vec3 "LpVec3"), then yaw, then head yaw, then data. The velocity
+// sits between pitch and yaw — the old three velocity shorts are gone. A zero
+// velocity is a single 0x00 byte (a non-zero one is a flag byte plus a packed
+// uint), so a stationary player spawn is 48 bytes, byte-for-byte vanilla. gomc
+// only spawns motionless players, so the velocity is always 0x00 here.
 type AddEntity struct {
 	EntityID            int32
 	UUID                codec.UUID
@@ -97,8 +98,8 @@ func (p *AddEntity) Encode(w *codec.Writer) {
 	w.Double(p.Y)
 	w.Double(p.Z)
 	w.Angle(p.Pitch)
+	w.VarInt(0) // velocity (LpVec3); 0x00 = no motion, before yaw
 	w.Angle(p.Yaw)
-	w.VarInt(0) // velocity (LpVec3); 0 = no motion, the only case gomc spawns
 	w.Angle(p.HeadYaw)
 	w.VarInt(p.Data)
 }
