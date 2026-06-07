@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"strings"
 	"testing"
@@ -349,6 +350,102 @@ func TestLoginOnlineModeWrongToken(t *testing.T) {
 	})
 
 	<-done // Serve must return (login refused) rather than hang
+}
+
+// chunkOp is one streamed chunk operation read from the client side.
+type chunkOp struct {
+	kind string // "center", "load", "unload"
+	x, z int32
+}
+
+// readChunkOps reads exactly n clientbound chunk-streaming packets (Set Center
+// Chunk 0x5E, Chunk Data 0x2D, Unload Chunk 0x25) and decodes their coordinates.
+func readChunkOps(t *testing.T, c *frame.Conn, n int) []chunkOp {
+	t.Helper()
+	ops := make([]chunkOp, 0, n)
+	for i := 0; i < n; i++ {
+		body, err := c.ReadPacket()
+		if err != nil {
+			t.Fatalf("read op %d/%d: %v", i, n, err)
+		}
+		r := codec.NewReader(body)
+		switch id := r.VarInt(); id {
+		case 0x5E:
+			ops = append(ops, chunkOp{"center", r.VarInt(), r.VarInt()})
+		case 0x2D:
+			ops = append(ops, chunkOp{"load", r.Int(), r.Int()})
+		case 0x25: // Unload Chunk: Z then X.
+			z, x := r.Int(), r.Int()
+			ops = append(ops, chunkOp{"unload", x, z})
+		default:
+			t.Fatalf("unexpected op id %#x", id)
+		}
+		if r.Err() != nil {
+			t.Fatalf("decode op %d: %v", i, r.Err())
+		}
+	}
+	return ops
+}
+
+func countKind(ops []chunkOp, kind string) int {
+	n := 0
+	for _, o := range ops {
+		if o.kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// TestChunkStreaming drives updateChunks directly: the initial recentre streams
+// the full (2N+1)² view with no unloads, and stepping one chunk east streams in
+// exactly the new column and unloads exactly the trailing one.
+func TestChunkStreaming(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	sess := New(serverConn, text.StatusResponse{}, offlineOpts, quietLogger())
+	sess.loaded = make(map[[2]int32]bool)
+	sess.chunkX, sess.chunkZ = math.MinInt32, math.MinInt32
+	client := frame.NewConn(clientConn)
+
+	span := int32(2*viewDistance + 1)
+
+	// Initial load at (0,0): one center + span² loads, no unloads.
+	go func() { _ = sess.updateChunks(0, 0) }()
+	ops := readChunkOps(t, client, int(1+span*span))
+	if ops[0].kind != "center" || ops[0].x != 0 || ops[0].z != 0 {
+		t.Fatalf("first op = %+v, want center (0,0)", ops[0])
+	}
+	if got := countKind(ops, "load"); int32(got) != span*span {
+		t.Errorf("initial loads = %d, want %d", got, span*span)
+	}
+	if got := countKind(ops, "unload"); got != 0 {
+		t.Errorf("initial unloads = %d, want 0", got)
+	}
+
+	// Step one chunk east: center + one new column loaded + one column unloaded.
+	go func() { _ = sess.updateChunks(1, 0) }()
+	ops = readChunkOps(t, client, int(1+span+span))
+	if ops[0].kind != "center" || ops[0].x != 1 || ops[0].z != 0 {
+		t.Fatalf("recentre op = %+v, want center (1,0)", ops[0])
+	}
+	for _, o := range ops[1:] {
+		switch o.kind {
+		case "load":
+			if o.x != viewDistance+1 { // the new east edge column
+				t.Errorf("loaded x = %d, want %d", o.x, viewDistance+1)
+			}
+		case "unload":
+			if o.x != -viewDistance { // the trailing west column
+				t.Errorf("unloaded x = %d, want %d", o.x, -viewDistance)
+			}
+		}
+	}
+	if got := countKind(ops, "load"); int32(got) != span {
+		t.Errorf("step loads = %d, want %d", got, span)
+	}
+	if got := countKind(ops, "unload"); int32(got) != span {
+		t.Errorf("step unloads = %d, want %d", got, span)
+	}
 }
 
 func TestInvalidNextStateClosesConn(t *testing.T) {

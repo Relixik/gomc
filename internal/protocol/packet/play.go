@@ -10,6 +10,7 @@ const (
 	idPlayGameEvent      = 0x26
 	idPlaySetCenterChunk = 0x5E
 	idPlayChunkData      = 0x2D
+	idPlayUnloadChunk    = 0x25
 	idPlaySyncPosition   = 0x48
 	idPlayKeepAliveCb    = 0x2C
 	// Serverbound

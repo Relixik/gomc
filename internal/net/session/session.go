@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -24,9 +25,9 @@ import (
 // errClose ends the read loop cleanly (e.g. after answering a status ping).
 var errClose = errors.New("session: closing")
 
-// viewDistance (in chunks) advertised in Login(play); the join sends a matching
-// (2N+1)² grid of chunks around spawn so the client finishes loading terrain.
-const viewDistance = 2
+// viewDistance (in chunks) advertised in Login(play); the join streams a
+// matching (2N+1)² grid of chunks around the player, following their movement.
+const viewDistance = 8
 
 // keepAlivePeriod is how often a clientbound Keep Alive is sent in Play (the
 // client is disconnected by vanilla after ~15s of silence).
@@ -73,6 +74,10 @@ type Session struct {
 	properties  []packet.LoginProperty
 	verifyToken []byte // expected echo in the Encryption Response (online mode)
 	entityID    int32
+
+	// Play-state chunk streaming (read-goroutine only — no locking needed).
+	chunkX, chunkZ int32             // the player's current center chunk
+	loaded         map[[2]int32]bool // chunk columns currently sent to the client
 }
 
 // New wraps conn in a Session in the Handshaking state. status is the snapshot
@@ -178,8 +183,12 @@ func (s *Session) handle(body []byte) error {
 	case *packet.PlayerLoaded:
 		s.logger.Info("player spawned", "name", s.username)
 		return nil
-	case *packet.MovePlayerPos, *packet.MovePlayerPosRot, *packet.MovePlayerRot:
-		return nil // movement accepted (no world simulation yet)
+	case *packet.MovePlayerPos:
+		return s.onMove(p.X, p.Z)
+	case *packet.MovePlayerPosRot:
+		return s.onMove(p.X, p.Z)
+	case *packet.MovePlayerRot:
+		return nil // rotation only — no position change, so no chunk update
 	case *packet.ChatMessage:
 		s.logger.Info("chat", "name", s.username, "msg", p.Message)
 		return nil
@@ -368,16 +377,12 @@ func (s *Session) enterPlay() error {
 	if err := s.send(&packet.GameEvent{Event: 13}); err != nil { // start waiting for level chunks
 		return err
 	}
-	if err := s.send(&packet.SetCenterChunk{ChunkX: 0, ChunkZ: 0}); err != nil {
+	// Load the initial view around spawn chunk (0,0); streaming then follows the
+	// player's movement.
+	s.loaded = make(map[[2]int32]bool)
+	s.chunkX, s.chunkZ = math.MinInt32, math.MinInt32 // force a full initial load
+	if err := s.updateChunks(0, 0); err != nil {
 		return err
-	}
-	payload := world.SuperflatPayload()
-	for x := int32(-viewDistance); x <= viewDistance; x++ {
-		for z := int32(-viewDistance); z <= viewDistance; z++ {
-			if err := s.send(&packet.ChunkData{X: x, Z: z, Payload: payload}); err != nil {
-				return err
-			}
-		}
 	}
 	// Spawn standing on the grass surface (the flat top block is at Y -61).
 	if err := s.send(&packet.SyncPlayerPosition{TeleportID: 1, X: 0, Y: -60, Z: 0}); err != nil {
@@ -385,6 +390,56 @@ func (s *Session) enterPlay() error {
 	}
 	go s.keepAliveLoop()
 	return nil
+}
+
+// onMove reacts to a player position update: if the player crossed into a new
+// chunk, the loaded view is recentred (new chunks streamed in, stale ones
+// unloaded).
+func (s *Session) onMove(x, z float64) error {
+	cx, cz := chunkOf(x), chunkOf(z)
+	if cx == s.chunkX && cz == s.chunkZ {
+		return nil
+	}
+	return s.updateChunks(cx, cz)
+}
+
+// updateChunks recentres the streamed view on chunk (cx,cz): it sends Set Center
+// Chunk, streams in every column now within the view distance that the client
+// does not have, and unloads every column that fell outside it.
+func (s *Session) updateChunks(cx, cz int32) error {
+	if err := s.send(&packet.SetCenterChunk{ChunkX: cx, ChunkZ: cz}); err != nil {
+		return err
+	}
+	payload := world.SuperflatPayload()
+	want := make(map[[2]int32]bool, (2*viewDistance+1)*(2*viewDistance+1))
+	for x := cx - viewDistance; x <= cx+viewDistance; x++ {
+		for z := cz - viewDistance; z <= cz+viewDistance; z++ {
+			key := [2]int32{x, z}
+			want[key] = true
+			if !s.loaded[key] {
+				if err := s.send(&packet.ChunkData{X: x, Z: z, Payload: payload}); err != nil {
+					return err
+				}
+				s.loaded[key] = true
+			}
+		}
+	}
+	for key := range s.loaded {
+		if !want[key] {
+			if err := s.send(&packet.UnloadChunk{X: key[0], Z: key[1]}); err != nil {
+				return err
+			}
+			delete(s.loaded, key)
+		}
+	}
+	s.chunkX, s.chunkZ = cx, cz
+	return nil
+}
+
+// chunkOf maps a block coordinate to its chunk coordinate (floored division by
+// the 16-block chunk width, correct for negatives).
+func chunkOf(coord float64) int32 {
+	return int32(math.Floor(coord / 16))
 }
 
 // keepAliveLoop periodically sends a clientbound Keep Alive while in Play, until

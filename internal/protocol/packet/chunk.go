@@ -19,3 +19,15 @@ func (p *ChunkData) Encode(w *codec.Writer) {
 	w.Int(p.Z)
 	w.Raw(p.Payload)
 }
+
+// UnloadChunk tells the client to drop a chunk column that left the view
+// distance. The field order is Z THEN X — a long-standing protocol quirk,
+// confirmed against a 26.1.2 capture. (Play, cb, 0x25.)
+type UnloadChunk struct{ X, Z int32 }
+
+func (p *UnloadChunk) ID() int32 { return idPlayUnloadChunk }
+
+func (p *UnloadChunk) Encode(w *codec.Writer) {
+	w.Int(p.Z)
+	w.Int(p.X)
+}
