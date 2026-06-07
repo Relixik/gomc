@@ -104,13 +104,15 @@ func TestAddEntityEncode(t *testing.T) {
 	if yaw := r.Angle(); yaw != 64 {
 		t.Errorf("yaw = %d", yaw)
 	}
+	if vel := r.VarInt(); vel != 0 { // velocity (LpVec3) comes between yaw and head
+		t.Errorf("velocity = %d, want 0", vel)
+	}
 	if head := r.Angle(); head != 64 {
 		t.Errorf("head yaw = %d", head)
 	}
 	if data := r.VarInt(); data != 0 {
 		t.Errorf("data = %d", data)
 	}
-	r.UByte() // trailing byte
 	if r.Err() != nil || r.Remaining() != 0 {
 		t.Fatalf("decode err=%v remaining=%d", r.Err(), r.Remaining())
 	}
